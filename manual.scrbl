@@ -1,27 +1,12 @@
 #lang scribble/manual
 
 @(require planet/scribble
-          planet/resolver
-          scribble/eval
-          racket/sandbox
           (for-label racket)
           (for-label net/url)
           (for-label net/head)
           (for-label (this-package-in request))
           (for-label (this-package-in head))
           )
-
-@(define my-evaluator
-   (call-with-trusted-sandbox-configuration
-    (lambda ()
-      (parameterize ([sandbox-output 'string]
-                     [sandbox-error-output 'string])
-        (make-evaluator 'racket
-                        #:requires
-                        (list (resolve-planet-path
-                               `(planet gh/http/request))
-                              (resolve-planet-path
-                               `(planet gh/http/head))))))))
 
 @title{HTTP}
 
@@ -77,7 +62,8 @@ over one connection.
 
 Begin and end an HTTP connection.
 
-@examples[#:eval my-evaluator
+Examples:
+@racket[
 (define-values (in out) (connect "http" "www.google.com" 80))
 (disconnect in out)]
 
@@ -90,9 +76,11 @@ Begin and end an HTTP connection.
 Given @racket[uri], uses @racket[uri->scheme&host&port] and @racket[connect] to
 connect.
 
-@examples[#:eval my-evaluator
+Example:
+@racket[
 (define-values (in out) (connect-uri "http://www.google.com/"))
-(disconnect in out)]
+(disconnect in out)
+]
 
 }
 
@@ -114,11 +102,25 @@ element, then reasonable defaults are provided.
 @racket["http"] or @racket[443] if @racket["https"].}
 ]
 
-@examples[#:eval my-evaluator
-(uri->scheme&host&port "www.foo.com")
-(uri->scheme&host&port "http://www.foo.com")
-(uri->scheme&host&port "https://www.foo.com")
-(uri->scheme&host&port "http://www.foo.com:8080")]
+Examples:
+@racket[
+> (uri->scheme&host&port "www.foo.com")
+"http"
+"www.foo.com"
+80
+> (uri->scheme&host&port "http://www.foo.com")
+"http"
+"www.foo.com"
+80
+> (uri->scheme&host&port "https://www.foo.com")
+"https"
+"www.foo.com"
+443
+> (uri->scheme&host&port "http://www.foo.com:8080")
+"http"
+"www.foo.com"
+8080
+]
 
 }
 
@@ -132,14 +134,22 @@ Splits @racket[uri] into the path portion required for a request, as well as
 some headers. If @racket[heads] doesn't already contain @tt{Host} or @tt{Date}
 headers they will be added automatically.
 
-@examples[#:eval my-evaluator
-(uri&headers->path&header "http://www.foo.com" '())
-(uri&headers->path&header
-  "http://www.foo.com"
-  (hash 'Date "Fri, 04 Nov 2011 22:16:34 GMT"))
-(uri&headers->path&header
-   "http://www.foo.com/path/to/res#fragment?query=val"
-   '())]
+Examples:
+@racket[
+> (uri&headers->path&header "http://www.foo.com" '())
+"/"
+"Host: www.foo.com\r\nDate: Sat, 18 Aug 2012 16:40:58 GMT\r\n\r\n"
+> (uri&headers->path&header
+    "http://www.foo.com"
+    (hash 'Date "Fri, 04 Nov 2011 22:16:34 GMT"))
+"/"
+"Host: www.foo.com\r\nDate: Fri, 04 Nov 2011 22:16:34 GMT\r\n\r\n"
+> (uri&headers->path&header
+     "http://www.foo.com/path/to/res#fragment?query=val"
+     '())
+"/path/to/res#fragment?query=val"
+"Host: www.foo.com\r\nDate: Sat, 18 Aug 2012 16:40:58 GMT\r\n\r\n"
+]
 
 }
 
@@ -490,9 +500,13 @@ to include a @tt{Connection: close} request header in @racket[heads].
 
 @defproc[(seconds->gmt-string [s exact-integer? (current-seconds)]) string?]{
 
-@examples[#:eval my-evaluator
-(seconds->gmt-string)
-(seconds->gmt-string 0)]
+Examples:
+@racket[
+> (seconds->gmt-string)
+"Sat, 18 Aug 2012 16:40:58 GMT"
+> (seconds->gmt-string 0)
+"Thu, 01 Jan 1970 00:00:00 GMT"
+]
 
 }
 
@@ -502,21 +516,31 @@ to include a @tt{Connection: close} request header in @racket[heads].
 [s exact-integer? (current-seconds)]
 ) string?]{
 
-@examples[#:eval my-evaluator
-(define sc (current-seconds))
-(seconds->gmt-8601-string 'plain sc)
-(seconds->gmt-8601-string 'T/Z sc)
-(seconds->gmt-8601-string 'T/.000Z sc)]
+Examples:
+@racket[
+> (define sc (current-seconds))
+> (seconds->gmt-8601-string 'plain sc)
+"2012-08-18 16:40:58"
+> (seconds->gmt-8601-string 'T/Z sc)
+"2012-08-18T16:40:58Z"
+> (seconds->gmt-8601-string 'T/.000Z sc)
+"2012-08-18T16:40:58.000Z"
+]
 
 }
 
 
 @defproc[(gmt-8601-string->seconds [s string?]) exact-integer?]{
 
-@examples[#:eval my-evaluator
-(gmt-8601-string->seconds "1970-01-01 00:00:00")
-(gmt-8601-string->seconds "1970-01-01T00:00:00Z")
-(gmt-8601-string->seconds "1970-01-01T00:00:00.000Z")]
+Examples:
+@racket[
+> (gmt-8601-string->seconds "1970-01-01 00:00:00")
+0
+> (gmt-8601-string->seconds "1970-01-01T00:00:00Z")
+0
+> (gmt-8601-string->seconds "1970-01-01T00:00:00.000Z")
+0
+]
 
 }
 
@@ -624,9 +648,13 @@ we can't store duplicate headers using those. Instead, duplicate
 headers are stored in the dict under the same key, with the various
 values separated by @racket[dupe-sep].
 
-@examples[#:eval my-evaluator
-(heads-string->dict "Host: Foo\r\nKey: Value\r\n\r\n")
-(heads-string->dict "Key: Value 1\r\nKey: Value 2\r\n\r\n")]
+Examples:
+@racket[
+> (heads-string->dict "Host: Foo\r\nKey: Value\r\n\r\n")
+'#hash((Host . "Foo") (Key . "Value"))
+> (heads-string->dict "Key: Value 1\r\nKey: Value 2\r\n\r\n")
+'#hash((Key . "Value 1\nValue 2"))
+]
 
 }
 
@@ -641,9 +669,13 @@ the terminating \r\n to end all the headers.  This is the reverse of
 @racket[heads-string->dict] including its handling of duplicate
 headers.
 
-@examples[#:eval my-evaluator
-(heads-dict->string '#hash((Host . "Foo") (Key . "Value")))
-(heads-dict->string '((Host . "Foo") (Key . "Value")))]
+Examples:
+@racket[
+> (heads-dict->string '#hash((Host . "Foo") (Key . "Value")))
+"Host: Foo\r\nKey: Value\r\n\r\n"
+> (heads-dict->string '((Host . "Foo") (Key . "Value")))
+"Host: Foo\r\nKey: Value\r\n\r\n"
+]
 
 }
 
@@ -656,9 +688,13 @@ headers.
 Like @racket[dict-set], but will set the new value @racket[v] for the
 key @racket[k] only if the key does not already exist in the dict.
 
-@examples[#:eval my-evaluator
-(maybe-dict-set '() 'a "New")
-(maybe-dict-set '([a . "Old"]) 'a "New")]
+Examples:
+@racket[
+> (maybe-dict-set '() 'a "New")
+'((a . "New"))
+> (maybe-dict-set '([a . "Old"]) 'a "New")
+'((a . "Old"))
+]
 
 }
 

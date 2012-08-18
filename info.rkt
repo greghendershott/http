@@ -3,10 +3,10 @@
 (define name "http")
 (define categories '(net))
 (define blurb
-  '(p "Provides support for HTTP 1.0 and 1.1 connections,"
-      "as well as for headers used in HTTP requests and responses."))
+  '("Provides support for HTTP 1.0 and 1.1 connections,"
+    "as well as for headers used in HTTP requests and responses."))
 (define release-notes
- '((p "Initial release.")))
+  '((p "Don't use evaluator for Scribble examples.")))
 (define homepage "https://github.com/greghendershott/http")
 
 (define version "2012-08-18")
