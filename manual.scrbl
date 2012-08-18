@@ -63,7 +63,7 @@ over one connection.
 Begin and end an HTTP connection.
 
 Examples:
-@racket[
+@racketblock[
 (define-values (in out) (connect "http" "www.google.com" 80))
 (disconnect in out)]
 
@@ -77,7 +77,7 @@ Given @racket[uri], uses @racket[uri->scheme&host&port] and @racket[connect] to
 connect.
 
 Example:
-@racket[
+@racketblock[
 (define-values (in out) (connect-uri "http://www.google.com/"))
 (disconnect in out)
 ]
@@ -103,7 +103,7 @@ element, then reasonable defaults are provided.
 ]
 
 Examples:
-@racket[
+@racketblock[
 > (uri->scheme&host&port "www.foo.com")
 "http"
 "www.foo.com"
@@ -135,7 +135,7 @@ some headers. If @racket[heads] doesn't already contain @tt{Host} or @tt{Date}
 headers they will be added automatically.
 
 Examples:
-@racket[
+@racketblock[
 > (uri&headers->path&header "http://www.foo.com" '())
 "/"
 "Host: www.foo.com\r\nDate: Sat, 18 Aug 2012 16:40:58 GMT\r\n\r\n"
@@ -501,7 +501,7 @@ to include a @tt{Connection: close} request header in @racket[heads].
 @defproc[(seconds->gmt-string [s exact-integer? (current-seconds)]) string?]{
 
 Examples:
-@racket[
+@racketblock[
 > (seconds->gmt-string)
 "Sat, 18 Aug 2012 16:40:58 GMT"
 > (seconds->gmt-string 0)
@@ -517,7 +517,7 @@ Examples:
 ) string?]{
 
 Examples:
-@racket[
+@racketblock[
 > (define sc (current-seconds))
 > (seconds->gmt-8601-string 'plain sc)
 "2012-08-18 16:40:58"
@@ -533,7 +533,7 @@ Examples:
 @defproc[(gmt-8601-string->seconds [s string?]) exact-integer?]{
 
 Examples:
-@racket[
+@racketblock[
 > (gmt-8601-string->seconds "1970-01-01 00:00:00")
 0
 > (gmt-8601-string->seconds "1970-01-01T00:00:00Z")
@@ -649,7 +649,7 @@ headers are stored in the dict under the same key, with the various
 values separated by @racket[dupe-sep].
 
 Examples:
-@racket[
+@racketblock[
 > (heads-string->dict "Host: Foo\r\nKey: Value\r\n\r\n")
 '#hash((Host . "Foo") (Key . "Value"))
 > (heads-string->dict "Key: Value 1\r\nKey: Value 2\r\n\r\n")
@@ -670,7 +670,7 @@ the terminating \r\n to end all the headers.  This is the reverse of
 headers.
 
 Examples:
-@racket[
+@racketblock[
 > (heads-dict->string '#hash((Host . "Foo") (Key . "Value")))
 "Host: Foo\r\nKey: Value\r\n\r\n"
 > (heads-dict->string '((Host . "Foo") (Key . "Value")))
@@ -689,7 +689,7 @@ Like @racket[dict-set], but will set the new value @racket[v] for the
 key @racket[k] only if the key does not already exist in the dict.
 
 Examples:
-@racket[
+@racketblock[
 > (maybe-dict-set '() 'a "New")
 '((a . "New"))
 > (maybe-dict-set '([a . "Old"]) 'a "New")
