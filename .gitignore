@@ -1,3 +1,4 @@
 tests/extra-uris
 planet-docs/*
 *.plt
+compiled/
