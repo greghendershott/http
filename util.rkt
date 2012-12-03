@@ -52,3 +52,11 @@
 
 (provide tr)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-logger http)
+(provide log-http-fatal
+         log-http-error
+         log-http-warning
+         log-http-info
+         log-http-debug)

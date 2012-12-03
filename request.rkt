@@ -124,7 +124,7 @@
 (define/contract/provide (connect scheme host port)
   ((or/c "http" "https") string? exact-positive-integer?
    . -> . (values input-port? output-port?))
-  (log-debug (format "connect ~a ~a ~a" scheme host port))
+  (log-http-debug (format "connect ~a ~a ~a" scheme host port))
   (match scheme
     ["https" (ssl-connect host port)]
     ["http" (tcp-connect host port)]))
@@ -151,10 +151,10 @@
 (define/contract/provide (start-request in out ver method path heads)
   (input-port? output-port? (or/c "1.0" "1.1") string? string? string?
    . -> . boolean?)
-  (log-debug (format "-> ~a ~a HTTP/~a" (string-upcase method) path ver))
+  (log-http-debug (format "-> ~a ~a HTTP/~a" (string-upcase method) path ver))
   (when (log-level? (current-logger) 'debug)
     (for ([(k v) (in-dict (heads-string->dict heads))])
-        (log-debug (format "-> ~a: ~a" k v))))
+        (log-http-debug (format "-> ~a: ~a" k v))))
 
   (display (format "~a ~a HTTP/~a\r\n" (string-upcase method) path ver) out)
   (display (format "~a" heads) out)
@@ -170,7 +170,7 @@
   (flush-output out)
   (match (extract-field "Expect" heads)
     ["100-continue"
-     (log-debug "Request header 'Expect: 100-continue'. Waiting/peeking...")
+     (log-http-debug "Request header 'Expect: 100-continue'. Waiting/peeking...")
      (define s (sync/timeout 1.0 in))
      (cond
       [s
@@ -179,10 +179,10 @@
                in)
          [(list (cons _ end))
           (read-string end in)
-          (log-debug "Got 100 continue.")
+          (log-http-debug "Got 100 continue.")
           #t]
          [else
-          (log-debug "Did not get 100 continue.")
+          (log-http-debug "Did not get 100 continue.")
           ;; Note: Due to using regexp-match-peek-positions, the
           ;; response will remain to read later.
           #f])])]
@@ -200,7 +200,7 @@
       ["gzip" gunzip-through-ports]
       ["deflate" inflate]
       [(var ce)
-       (log-warning
+       (log-http-warning
         (format "can't handle Content-Encoding \"~a\"" ce))
        copy-port]))
 
@@ -236,7 +236,7 @@
   (define cl (extract-field/number "Content-Length" h 10))
 
   (define (read/no-op dst)
-    (log-warning "can't read until eof using HTTP 1.1")
+    (log-http-warning "can't read until eof using HTTP 1.1")
     eof)
 
   (define (read/to-eof dst)
@@ -246,18 +246,18 @@
     (let ([remaining cl])
       (lambda (dst)
         (define to-do (min remaining (bytes-length dst)))
-        (log-debug (format "remaining ~a to-do ~a" remaining to-do))
+        (log-http-debug (format "remaining ~a to-do ~a" remaining to-do))
         (cond
          [(or (zero? remaining)
               (zero? to-do))
-          (log-debug "returning eof from zero? remaining or to-do")
+          (log-http-debug "returning eof from zero? remaining or to-do")
           eof]
          [else
           (define done (read-bytes! dst in 0 to-do))
           (cond
            [(eof-object? done)
             (set! remaining 0)
-            (log-debug "returning eof from eof-object? done")
+            (log-http-debug "returning eof from eof-object? done")
             eof]
            [else
             (set! remaining (- remaining done))
@@ -273,7 +273,7 @@
           eof]
          [else
           (define to-do (min (bytes-length dst) (bytes-length chunk)))
-          ;; (log-debug (format "<- dst ~a chunk ~a to-do ~a"
+          ;; (log-http-debug (format "<- dst ~a chunk ~a to-do ~a"
           ;;                    (bytes-length dst) (bytes-length chunk) to-do))
           (cond
            [(zero? to-do) eof]
@@ -308,7 +308,7 @@
   (input-port? . -> . (or/c eof-object? bytes?))
   (define s (read-line in 'any))
   (define chunk-size (string->number (string-trim s) 16))
-  ;; (log-debug (format "<- entity chunk size ~a" chunk-size))
+  ;; (log-http-debug (format "<- entity chunk size ~a" chunk-size))
   (cond
    [(or (not chunk-size) (zero? chunk-size)) ;last chunk is 0 bytes
     (read-bytes-line in 'any) ;consume final blank line
@@ -426,22 +426,32 @@
 ;; YYYY-MM-DDThh:mm:ss.000Z, as specified in the ISO 8601 standard.
 (define/contract/provide (seconds->gmt-8601-string [style 'T/Z]
                                                    [s (current-seconds)])
-  (() ((or/c 'plain 'T/Z 'T/.000Z) exact-integer?) . ->* . string?)
+  (() ((or/c 'basic 'plain 'T/Z 'T/.000Z) exact-integer?) . ->* . string?)
   (define date (seconds->date s #f))
-  (format "~a-~a-~a~a~a:~a:~a~a"
+  (match style
+    ['basic
+       (format "~a~a~aT~a~a~aZ"
           (date-year date)
           (two-digits (date-month date))
           (two-digits (date-day date))
-          (match style
-            [(or 'T/Z 'T/.000Z) "T"]
-            ['plain " "])
           (two-digits (date-hour date))
           (two-digits (date-minute date))
-          (two-digits (date-second date))
-          (match style
-            ['T/Z "Z"]
-            ['T/.000Z ".000Z"]
-            ['plain ""])))
+          (two-digits (date-second date)))]
+    [else
+     (format "~a-~a-~a~a~a:~a:~a~a"
+             (date-year date)
+             (two-digits (date-month date))
+             (two-digits (date-day date))
+             (match style
+               [(or 'T/Z 'T/.000Z) "T"]
+               ['plain " "])
+             (two-digits (date-hour date))
+             (two-digits (date-minute date))
+             (two-digits (date-second date))
+             (match style
+               ['T/Z "Z"]
+               ['T/.000Z ".000Z"]
+               ['plain ""]))]))
 
 (define/contract/provide (gmt-8601-string->seconds s)
   (string? . -> . exact-integer?)
@@ -475,7 +485,7 @@
   (define h (purify-port in))
   (when (log-level? (current-logger) 'debug)
     (for ([(k v) (in-dict (heads-string->dict h))])
-        (log-debug (format "<- ~a: ~a" k v))))
+        (log-http-debug (format "<- ~a: ~a" k v))))
   h)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -566,14 +576,14 @@
     (cond
      [(and (same-connection? old-url new-url)
            (not (close-connection? h)))
-      (log-info (format "<> Redirect ~a using SAME connection. ~a ~a"
-                        redirects location (url->string new-url)))
+      (log-http-info (format "<> Redirect ~a using SAME connection. ~a ~a"
+                             redirects location (url->string new-url)))
       (request/redirect ver method in out (url->string new-url)
                         data heads proc (sub1 redirects))]
      [else
       ;; No
-      (log-info (format "<> Redirect ~a using NEW connection. ~a ~a"
-                        redirects location (url->string new-url)))
+      (log-http-info (format "<> Redirect ~a using NEW connection. ~a ~a"
+                             redirects location (url->string new-url)))
       (disconnect in out) ;go ahead and close now to free up connections
       (call/request ver method (url->string new-url) data heads proc
                     (sub1 redirects))])]
@@ -692,8 +702,9 @@
         #f]
        [else
         (define e (read-entity/bytes in h))
-        (log-debug (format "<- ~a bytes entity transfer and content decoded"
-                           (bytes-length e)))
+        (log-http-debug
+         (format "<- ~a bytes entity transfer and content decoded"
+                 (bytes-length e)))
         (match (extract-field "Connection" h)
           [(regexp "(?i:close)") 'ok/close]
           [else 'ok/open])]))
@@ -701,7 +712,8 @@
                      ['ok/open
                       (not (not (get)))]  ;try again on same connection
                      ['ok/close
-                      (log-debug "can't try again, due to Connection: close")
+                      (log-http-debug
+                       "can't try again, due to Connection: close")
                       #t]
                      [else #f]))
     (disconnect in out)

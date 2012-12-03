@@ -1,7 +1,7 @@
 #lang racket
 
 (require net/head
-         )
+         "util.rkt")
 
 (provide extract-http-ver&code&text
          extract-http-ver
@@ -29,7 +29,7 @@
               (list _ ver code text))
      (values ver (string->number code) text)]
     [else
-     (log-warning (string-append "bad response header: " h))
+     (log-http-warning (string-append "bad response header: " h))
      (values "???" 999 "Bad Response")]))
 
 (define (extract-http-ver h)
