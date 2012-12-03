@@ -2,3 +2,4 @@ tests/extra-uris
 planet-docs/*
 *.plt
 compiled/
+.DS_Store
