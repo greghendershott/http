@@ -55,7 +55,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define-logger http)
-(provide log-http-fatal
+(provide http-logger
+         log-http-fatal
          log-http-error
          log-http-warning
          log-http-info

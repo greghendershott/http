@@ -152,7 +152,7 @@
   (input-port? output-port? (or/c "1.0" "1.1") string? string? string?
    . -> . boolean?)
   (log-http-debug (format "-> ~a ~a HTTP/~a" (string-upcase method) path ver))
-  (when (log-level? (current-logger) 'debug)
+  (when (log-level? http-logger 'debug)
     (for ([(k v) (in-dict (heads-string->dict heads))])
         (log-http-debug (format "-> ~a: ~a" k v))))
 
@@ -483,7 +483,7 @@
 (define/contract/provide (purify-port/log-debug in)
   (input-port? . -> . string?)
   (define h (purify-port in))
-  (when (log-level? (current-logger) 'debug)
+  (when (log-level? http-logger 'debug)
     (for ([(k v) (in-dict (heads-string->dict h))])
         (log-http-debug (format "<- ~a: ~a" k v))))
   h)
