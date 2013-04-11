@@ -1,24 +1,19 @@
 #lang scribble/manual
 
-@(require planet/scribble
-          (for-label racket)
+@(require (for-label racket)
           (for-label net/url)
           (for-label net/head)
-          (for-label (this-package-in request))
-          (for-label (this-package-in head))
-          )
+          (for-label "request.rkt")
+          (for-label "head.rkt"))
 
 @title{HTTP}
 
 This libary provides support for HTTP 1.0 and 1.1 connections, as well as
 for headers used in HTTP requests and responses.
 
-@table-of-contents{}
-
 @section{Request}
 
-
-@defmodule/this-package[request]
+@defmodule[request]
 
 @subsection{Why not just use @racket[net/url]?}
 
@@ -550,7 +545,7 @@ Examples:
 
 @section{Head}
 
-@defmodule/this-package[head]
+@defmodule[head]
 
 @; ----------------------------------------------------------------------
 
