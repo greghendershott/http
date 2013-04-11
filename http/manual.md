@@ -1,5 +1,3 @@
-HTTP
-
 This libary provides support for HTTP 1.0 and 1.1 connections, as well
 as for headers used in HTTP requests and responses.
 
