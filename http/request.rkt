@@ -603,7 +603,8 @@
   (define location (redirect-uri h))
   (cond
    [(and location (> redirects 0))
-    (read-entity/bytes in h) ;consume/ignore
+    (unless (equal? method "HEAD") ; there's never a body for a HEAD request
+      (read-entity/bytes in h)) ;consume/ignore
     (define old-url (string->url uri))
     (define new-url (combine-url/relative old-url location))
     ;; Can we use the existing connection for the new location?
