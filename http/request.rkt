@@ -235,12 +235,17 @@
   (define te (or (extract-field "Transfer-Encoding" h) ""))
   (define cl (extract-field/number "Content-Length" h 10))
 
+  (define (ready-evt in) (wrap-evt in (lambda (v) 0)))
+
   (define (read/no-op dst)
     (log-http-warning "can't read until eof using HTTP 1.1")
     eof)
 
   (define (read/to-eof dst)
-    (read-bytes! dst in))
+    (define n (read-bytes-avail!* dst in))
+    (if (equal? n 0)
+        (ready-evt in) ; means "try again when `in' has input"
+        n))
 
   (define read/not-chunked
     (let ([remaining cl])
@@ -253,12 +258,15 @@
           (log-http-debug "returning eof from zero? remaining or to-do")
           eof]
          [else
-          (define done (read-bytes! dst in 0 to-do))
+          (define done (read-bytes-avail!* dst in 0 to-do))
           (cond
            [(eof-object? done)
             (set! remaining 0)
             (log-http-debug "returning eof from eof-object? done")
             eof]
+           [(zero? done)
+            ;; means "try again when `in' has input":
+            (ready-evt in)]
            [else
             (set! remaining (- remaining done))
             done])]))))
@@ -268,7 +276,20 @@
       (lambda (dst)
         (when (not chunk)
           (set! chunk (get-next-chunk in)))
+        ;; Try to `chunk' along if it's an event:
+        (let loop ()
+          (when (evt? chunk)
+            (let ([v (sync/timeout 0 chunk)])
+              (when v
+                (set! chunk v)
+                (loop)))))
         (cond
+         [(evt? chunk) 
+          ;; means "try again when `in' has input", which
+          ;; would causes a busy loop if `in' has input but
+          ;; not a whole line, but we hope that's uncommon
+          ;; or short-lived:
+          (ready-evt in)]
          [(eof-object? chunk)
           eof]
          [else
@@ -304,19 +325,32 @@
                    (lambda () (void)))) ;close
 
 ;; Read another chunk for Transfer-Encoding: Chunked.
+;; To avoid blocking, sequence the read in terms events, where
+;; an event's result can be another event that has to complete
+;; before data is actually available. A non-event result is
+;; the result that you'd get if `get-next-chunk' could use
+;; direct style.
 (define/contract (get-next-chunk in)
-  (input-port? . -> . (or/c eof-object? bytes?))
-  (define s (read-line in 'any))
-  (define chunk-size (string->number (string-trim s) 16))
-  ;; (log-http-debug (format "<- entity chunk size ~a" chunk-size))
-  (cond
-   [(or (not chunk-size) (zero? chunk-size)) ;last chunk is 0 bytes
-    (read-bytes-line in 'any) ;consume final blank line
-    eof]
-   [else
-    (begin0
-        (read-bytes chunk-size in)
-      (read-bytes-line in 'any))])) ;consume final blank line
+  (input-port? . -> . evt?)
+  (wrap-evt
+   (read-line-evt in 'any)
+   (lambda (s)
+     (define chunk-size (string->number (string-trim s) 16))
+     ;; (log-http-debug (format "<- entity chunk size ~a" chunk-size))
+     (cond
+      [(or (not chunk-size) (zero? chunk-size)) ;last chunk is 0 bytes
+       (wrap-evt 
+        (read-bytes-line-evt in 'any) ;consume final blank line
+        (lambda (ignored)
+          eof))]
+      [else
+       (wrap-evt
+        (read-bytes-evt chunk-size in)
+        (lambda (s)
+          (wrap-evt
+           (read-bytes-line-evt in 'any) ;consume final blank line
+           (lambda (ignored)
+             s))))]))))
 
 (define/contract/provide (read-entity/port in h out)
   (input-port? (or/c string? bytes?) output-port? . -> . any)
@@ -569,7 +603,8 @@
   (define location (redirect-uri h))
   (cond
    [(and location (> redirects 0))
-    (read-entity/bytes in h) ;consume/ignore
+    (unless (equal? method "HEAD") ; there's never a body for a HEAD request
+      (read-entity/bytes in h)) ;consume/ignore
     (define old-url (string->url uri))
     (define new-url (combine-url/relative old-url location))
     ;; Can we use the existing connection for the new location?
