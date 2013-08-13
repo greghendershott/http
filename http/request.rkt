@@ -224,99 +224,47 @@
       (decode func b)))
 
 ;; This is the core procedure to read an HTTP entity in accordance
-;; with the `Transfer-Encooding` header. It returns a custom
-;; `input-port?` from which you can read the entity until the port
-;; returns `eof`. By giving you the port and letting you do the reads,
-;; you can read a very large entity in small pieces (to provide a
-;; progress indicator, or simply to avoid consuming memory on one
-;; large `bytes?` object).
+;; with the `Transfer-Encooding` header. It returns an `input-port?`
+;; from which you can read the entity until the port returns `eof`. By
+;; giving you the port and letting you do the reads, you can read a
+;; very large entity in small pieces (to provide a progress indicator,
+;; or simply to avoid consuming memory on one large `bytes?` object).
 (define/contract/provide (read-entity/transfer-decoding-port in h)
   (input-port? (or/c string? bytes?) . -> . input-port?)
   (define te (or (extract-field "Transfer-Encoding" h) ""))
   (define cl (extract-field/number "Content-Length" h 10))
-
-  (define (read/no-op dst)
-    (log-http-warning "can't read until eof using HTTP 1.1")
-    eof)
-
-  (define (read/to-eof dst)
-    (read-bytes! dst in))
-
-  (define read/not-chunked
-    (let ([remaining cl])
-      (lambda (dst)
-        (define to-do (min remaining (bytes-length dst)))
-        (log-http-debug (format "remaining ~a to-do ~a" remaining to-do))
-        (cond
-         [(or (zero? remaining)
-              (zero? to-do))
-          (log-http-debug "returning eof from zero? remaining or to-do")
-          eof]
-         [else
-          (define done (read-bytes! dst in 0 to-do))
-          (cond
-           [(eof-object? done)
-            (set! remaining 0)
-            (log-http-debug "returning eof from eof-object? done")
-            eof]
-           [else
-            (set! remaining (- remaining done))
-            done])]))))
-
-  (define read/chunked
-    (let ([chunk #f])
-      (lambda (dst)
-        (when (not chunk)
-          (set! chunk (get-next-chunk in)))
-        (cond
-         [(eof-object? chunk)
-          eof]
-         [else
-          (define to-do (min (bytes-length dst) (bytes-length chunk)))
-          ;; (log-http-debug (format "<- dst ~a chunk ~a to-do ~a"
-          ;;                    (bytes-length dst) (bytes-length chunk) to-do))
-          (cond
-           [(zero? to-do) eof]
-           [else
-            (bytes-copy! dst 0 chunk 0 to-do)
-            (cond
-             [(= to-do (bytes-length chunk))
-              (set! chunk (get-next-chunk in))]
-             [else
-              (set! chunk (subbytes chunk to-do (bytes-length chunk)))])
-            to-do])]))))
-
-  (define read-in
-    (cond
-     ;; If Transfer-Encoding is "chunked", read chunked (duh).
-     [(string-ci=? te "chunked") read/chunked]
-     ;; If Content-Length supplied, read exactly that amount.
-     [cl read/not-chunked]
-     ;; If connection will be closed, just read to eof.
-     [(close-connection? h) read/to-eof]
-     ;; Else nothing good we can do. With 1.1 persistent connection
-     ;; there is no meaingful "eof".
-     [else read/no-op]))
-
-  (make-input-port 'http-entity-transfer-decoding-input-port
-                   read-in
-                   #f                   ;peek
-                   (lambda () (void)))) ;close
-
-;; Read another chunk for Transfer-Encoding: Chunked.
-(define/contract (get-next-chunk in)
-  (input-port? . -> . (or/c eof-object? bytes?))
-  (define s (read-line in 'any))
-  (define chunk-size (string->number (string-trim s) 16))
-  ;; (log-http-debug (format "<- entity chunk size ~a" chunk-size))
   (cond
-   [(or (not chunk-size) (zero? chunk-size)) ;last chunk is 0 bytes
-    (read-bytes-line in 'any) ;consume final blank line
-    eof]
-   [else
-    (begin0
-        (read-bytes chunk-size in)
-      (read-bytes-line in 'any))])) ;consume final blank line
+   ;; If Transfer-Encoding is "chunked", read chunked (duh).
+   [(string-ci=? te "chunked") (make-codec-input-port in un-chunk 'chunked)]
+   ;; If Content-Length supplied, limit to exactly that amount.
+   [cl (make-limited-input-port in cl)]
+   ;; If connection will be closed, whatever.
+   [(close-connection? h) in]
+   ;; Else nothing good we can do. With HTTP 1.1 persistent connection
+   ;; there is no meaningful "eof".
+   [else (log-http-warning "can't read until eof using HTTP 1.1")
+         (make-limited-input-port in 0)]))
+
+;; `codec` is (input-port? output-port? -> any). For example can be
+;; deflate, inflate, gzip-through-ports, gunzip-through-ports.
+(define codec-buffer-size (make-parameter 1024))
+(define (make-codec-input-port in codec [name #f])
+  (define-values (pin pout) (make-pipe (codec-buffer-size) name name))
+  (thread (lambda ()
+            (codec in pout)
+            (close-output-port pout)))
+  pin)
+
+(define (un-chunk in out)
+  (let loop ()
+    (define s (read-line in 'any))
+    (define chunk-size (string->number (string-trim s) 16))
+    ;; (log-http-debug (format "<- entity chunk size ~a" chunk-size))
+    (cond [(not chunk-size) (error 'un-chunk "bad chunk size: ~s" s)]
+          [else (write-bytes (read-bytes chunk-size in) out)
+                (read-bytes-line in 'any) ;read trailing \r\n
+                (unless (zero? chunk-size)
+                  (loop))])))
 
 (define/contract/provide (read-entity/port in h out)
   (input-port? (or/c string? bytes?) output-port? . -> . any)
