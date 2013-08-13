@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/greghendershott/http.png?branch=master)](https://travis-ci.org/greghendershott/http)
+
 Documentation
 =============
 
