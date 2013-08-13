@@ -500,9 +500,9 @@
 ;; scheme, host, and port?
 (define/contract/provide (same-connection? old new)
   (url? url? . -> . boolean?)
-  (equal? (url-scheme old) (url-scheme new))
-  (equal? (url-host old) (url-host new))
-  (equal? (url-port old) (url-port new)))
+  (and (equal? (url-scheme old) (url-scheme new))
+       (equal? (url-host old) (url-host new))
+       (equal? (url-port old) (url-port new))))
 
 ;; Based on response headers, should the connection be closed?
 (define/contract/provide (close-connection? h)
