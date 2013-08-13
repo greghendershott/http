@@ -569,8 +569,6 @@
   (define location (redirect-uri h))
   (cond
    [(and location (> redirects 0))
-    (unless (equal? method "HEAD") ; there's never a body for a HEAD request
-      (read-entity/bytes in h)) ;consume/ignore
     (define old-url (string->url uri))
     (define new-url (combine-url/relative old-url location))
     ;; Can we use the existing connection for the new location?
@@ -579,10 +577,14 @@
            (not (close-connection? h)))
       (log-http-info (format "<> Redirect ~a using SAME connection. ~a ~a"
                              redirects location (url->string new-url)))
+      ;; Since we're resusing the same connection, we must
+      ;; consume/ignore the response entity (if any: HEAD responses
+      ;; have none).
+      (unless (string-ci=? method "HEAD")
+        (read-entity/bytes in h))
       (request/redirect ver method in out (url->string new-url)
                         data heads proc (sub1 redirects))]
      [else
-      ;; No
       (log-http-info (format "<> Redirect ~a using NEW connection. ~a ~a"
                              redirects location (url->string new-url)))
       (disconnect in out) ;go ahead and close now to free up connections
