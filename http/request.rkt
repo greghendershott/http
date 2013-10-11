@@ -171,22 +171,22 @@
   (match (extract-field "Expect" heads)
     ["100-continue"
      (log-http-debug "Request header 'Expect: 100-continue'. Waiting/peeking...")
-     (define s (sync/timeout 1.0 in))
-     (cond
-      [s
-       (match (regexp-match-peek-positions
-               #rx"^HTTP/1\\.1 100 Continue(?:\r\n\r\n|\n\n|\r\r)"
-               in)
-         [(list (cons _ end))
-          (read-string end in)
-          (log-http-debug "Got 100 continue.")
-          #t]
-         [else
-          (log-http-debug "Did not get 100 continue.")
-          ;; Note: Due to using regexp-match-peek-positions, the
-          ;; response will remain to read later.
-          #f])])]
-    [else #t]))
+     (unless (sync/timeout 10.0 in)
+       (raise (exn:fail:network "Timeout waiting for 100 continue"
+                                (current-continuation-marks))))
+     (match (regexp-match-peek-positions
+             #rx"^HTTP/1\\.1 100 Continue(?:\r\n\r\n|\n\n|\r\r)"
+             in)
+       [(list (cons _ end))
+        (read-string end in)
+        (log-http-debug "Got 100 continue.")
+        #t]
+       [_
+        (log-http-debug "Did not get 100 continue.")
+        ;; Note: Due to using regexp-match-peek-positions, the
+        ;; response will remain to read later.
+        #f])]
+    [_ #t]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Examines the Content-Encoding header if any in `h`, and returns a
