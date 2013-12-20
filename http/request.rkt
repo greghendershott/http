@@ -259,7 +259,6 @@
   (let loop ()
     (define s (read-line in 'any))
     (define chunk-size (string->number (string-trim s) 16))
-    ;; (log-http-debug (format "<- entity chunk size ~a" chunk-size))
     (cond [(not chunk-size) (error 'un-chunk "bad chunk size: ~s" s)]
           [else (write-bytes (read-bytes chunk-size in) out)
                 (read-bytes-line in 'any) ;read trailing \r\n
@@ -432,6 +431,10 @@
   (input-port? . -> . string?)
   (define h (purify-port in))
   (when (log-level? http-logger 'debug)
+    (log-http-debug (format "<- HTTP/~a ~a ~a"
+                            (extract-http-ver h)
+                            (extract-http-code h)
+                            (extract-http-text h)))
     (for ([(k v) (in-dict (heads-string->dict h))])
         (log-http-debug (format "<- ~a: ~a" k v))))
   h)
