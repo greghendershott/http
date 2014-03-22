@@ -121,23 +121,128 @@
                              (heads-dict->string heads)))])
     (values p+q+f header)))
 
-(define/contract/provide (connect scheme host port)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; "Raw" connections.
+
+(define/contract/provide (connect* scheme host port)
   ((or/c "http" "https") string? exact-positive-integer?
    . -> . (values input-port? output-port?))
-  (log-http-debug (format "connect ~a ~a ~a" scheme host port))
+  (log-http-debug (format "connect* ~a ~a ~a" scheme host port))
   (match scheme
     ["https" (ssl-connect host port)]
     ["http" (tcp-connect host port)]))
 
-(define/contract/provide (disconnect in out)
+(define/contract/provide (connect*-uri uri)
+  (string?  . -> . (values input-port? output-port?))
+  (define-values (scheme host port) (uri->scheme&host&port uri))
+  (connect* scheme host port))
+
+(define/contract/provide (disconnect* in out)
   (input-port? output-port? . -> . any)
+  (log-http-debug (format "disconnect* ~a ~a" in out))
   (close-output-port out)
   (close-input-port in))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Reusable ("pooled") connections.
+;;
+;; `disconnect` moves connections that are in `used` hash into a
+;; `free` hash for possible later reuse. A thread handles the timeout
+;; and does the raw `disconnect*`.
+;;
+;; `connect` checks the `free` list, otherwise uses `connect*`.
+
+(define current-pool-timeout (make-parameter 0))
+(provide (contract-out [current-pool-timeout parameter/c]))
+
+(define used (make-hash)) ;(list in out) => (list scheme host port)
+(define free (make-hash)) ;(list scheme host port) => (list in out thread)
+
+(define free-sema (make-semaphore 1))
+(define-syntax-rule (with-semaphore sema es ...)
+  (call-with-semaphore sema (λ () es ...)))
+
+(define cust (make-custodian))
+
+(define/contract/provide (connect scheme host port)
+  ((or/c "http" "https") string? exact-positive-integer?
+   . -> . (values input-port? output-port?))
+  (log-http-debug (format "connect ~a ~a ~a" scheme host port))
+  ;; If open connection is on `free` list, use it. Else call connect*
+  (define-values (in out)
+    (with-semaphore free-sema
+      (match (hash-ref free (list scheme host port) #f)
+        [(list in out thd)
+         (parameterize ([current-custodian cust])
+           (kill-thread thd))
+         (hash-remove! free (list scheme host port))
+         (cond [(or (port-closed? in)
+                    (port-closed? out))
+                (log-http-warning (format "pooled port(s) closed ~a ~a ~a"
+                                          scheme host port))
+                (disconnect* in out) ;make sure both closed
+                (connect* scheme host port)]
+               [else
+                (log-http-debug (format "use pool connection for ~a ~a ~a"
+                                        scheme host port))
+                (values in out)])]
+        [_ (connect* scheme host port)])))
+  ;; When pool timeout is positive -- i.e. pooling is desired -- add
+  ;; to `used`. Else don't, which ensures disconnect will simply do a
+  ;; raw disconnect*.
+  (when (positive? (current-pool-timeout))
+    (hash-set! used
+               (list in out)
+               (list scheme host port)))
+  (values in out))
 
 (define/contract/provide (connect-uri uri)
   (string?  . -> . (values input-port? output-port?))
   (define-values (scheme host port) (uri->scheme&host&port uri))
   (connect scheme host port))
+
+;; This says that when `disconnect` is called for this connection, it
+;; should NOT be left open and pooled for possible reuse. This should
+;; be called when close-connection? would return #t, or when there is
+;; some exn:fail:network? for either of the ports.
+(define/contract/provide (unpool in out)
+  (input-port? output-port? . -> . any)
+  (log-http-debug (format "unpool ~a ~a" in out))
+  (hash-remove! used (list in out)))
+
+(define/contract/provide (disconnect in out)
+  (input-port? output-port? . -> . any)
+  (log-http-debug (format "disconnect ~a ~a" in out))
+  (match (hash-ref used (list in out) #f)
+    [(list scheme host port)
+     ;; Move from `used` to `free` list
+     (hash-remove! used (list in out))
+     (with-semaphore free-sema
+       (cond [(hash-has-key? free (list scheme host port))
+              (log-http-warning (format "~a ~a ~a already in pool" scheme host port))
+              (disconnect* in out)]
+             [else
+              (log-http-debug (format "~a ~a ~a to pool" scheme host port))
+              (hash-set! free
+                         (list scheme host port)
+                         (list in out
+                               (parameterize ([current-custodian cust])
+                                 (thread
+                                  (λ ()
+                                    (sleep (current-pool-timeout))
+                                    (log-http-debug
+                                     (format "~a ~a ~a timeout close & rm from pool"
+                                             scheme host port))
+                                    (with-semaphore free-sema
+                                      (hash-remove! free (list scheme host port)))
+                                    (disconnect* in out))))))]))]
+    [_
+     (log-http-debug "disconnect: not in `used` hash; calling disconnect*")
+     (disconnect* in out)]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; When method is "put" or "post", this returns a boolean?. If #t, you
 ;; should go ahead and transmit the entity (the put or post data),
@@ -419,11 +524,9 @@
                    (string->number day)
                    (string->number month)
                    (string->number year)
-                   #f)
-     ]
-    [else
-     (error 'gmt-8601-string->seconds
-            "expected RFC 8601 date string, got ~a" s)]))
+                   #f)]
+    [_ (error 'gmt-8601-string->seconds
+              "expected RFC 8601 date string, got ~a" s)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -512,42 +615,38 @@
   (define-values (path rh) (uri&headers->path&header uri heads))
   (define tx-data? (start-request in out ver method path rh))
   (when (and tx-data? data)
-    (cond
-     [(bytes? data) (display data out)]
-     [(procedure? data) (data out)])
+    (cond [(bytes? data) (display data out)]
+          [(procedure? data) (data out)])
     (flush-output out))
   (define h (purify-port/log-debug in))
+  (when (close-connection? h)
+    (unpool in out))
   (define location (redirect-uri h))
-  (cond
-   [(and location (> redirects 0))
-    (define old-url (string->url uri))
-    (define new-url (combine-url/relative old-url location))
-    ;; Can we use the existing connection for the new location?
-    (cond
-     [(and (same-connection? old-url new-url)
-           (not (close-connection? h)))
-      (log-http-info (format "<> Redirect ~a using SAME connection. ~a ~a"
-                             redirects location (url->string new-url)))
-      ;; Since we're resusing the same connection, we must
-      ;; consume/ignore the response entity (if any: HEAD responses
-      ;; have none).
-      (unless (string-ci=? method "HEAD")
-        (read-entity/bytes in h))
-      (request/redirect ver method in out (url->string new-url)
-                        data heads proc (sub1 redirects))]
-     [else
-      (log-http-info (format "<> Redirect ~a using NEW connection. ~a ~a"
-                             redirects location (url->string new-url)))
-      (disconnect in out) ;go ahead and close now to free up connections
-      (call/request ver method (url->string new-url) data heads proc
-                    (sub1 redirects))])]
-   [else (proc in h)]))
+  (cond [(and location (> redirects 0))
+         (define old-url (string->url uri))
+         (define new-url (combine-url/relative old-url location))
+         (unless (string-ci=? method "HEAD")
+           (read-entity/bytes in h))
+         (cond [(and (same-connection? old-url new-url)
+                     (not (close-connection? h)))
+                (log-http-debug
+                 (format "<> Redirect ~a using SAME connection. ~a ~a"
+                         redirects location (url->string new-url)))
+                (request/redirect ver method in out (url->string new-url)
+                                  data heads proc (sub1 redirects))]
+               [else
+                (log-http-debug
+                 (format "<> Redirect ~a using NEW connection. ~a ~a"
+                         redirects location (url->string new-url)))
+                (disconnect in out)
+                (call/request ver method (url->string new-url) data heads proc
+                              (sub1 redirects))])]
+        [else (proc in h)]))
 
 ;; call/input-request is a simpler version of `call/request` for the
 ;; case where you want to make just one request and it is not a put or
-;; post request (there is no data to send). As a result, the callback
-;; proc is passed just the response header and the input port. Like
-;; `call/request` it gurantees the ports will be closed.
+;; post request (there is no data to send). Like `call/request` it
+;; gurantees the ports will be closed.
 (define/provide (call/input-request ver method uri heads proc
                                     #:redirects [redirects 10])
   (call/request ver method uri #f heads proc redirects))
@@ -555,7 +654,7 @@
 ;; call/output-request is a simpler version of `call/request` for the
 ;; case where you want to make just one request and it is a put or
 ;; post request. The data may be passed as bytes? or as a procedure
-;; that will write to an output-port?; if the latter, you must pass
+;; that will write to an output-port?. If the latter, you must pass
 ;; `len' unless you have already supplied a Content-Length header
 ;; yourself.
 (define/contract/provide (call/output-request ver method uri data len heads proc
@@ -573,14 +672,12 @@
                 redirects))
 
 (define (maybe-add-cl dict data len)
-  (define cl (cond
-              [len len]
-              [data (bytes-length data)]
-              [else #f]))
+  (define cl (cond [len len]
+                   [data (bytes-length data)]
+                   [else #f]))
   (cond
-   [cl
-    (heads-string->dict
-     (maybe-insert-field "Content-Length" cl (heads-dict->string dict)))]
+   [cl (heads-string->dict
+        (maybe-insert-field "Content-Length" cl (heads-dict->string dict)))]
    [else dict]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -589,6 +686,7 @@
 ;; Why use these instead? They support:
 ;; 1. SSL (only added in Racket 5.?.?
 ;; 2. "Expect: Continue 100" header, for big put/post requests.
+;; Note that these do NOT support connection pooling.
 
 (define http-ver (make-parameter "1.0"))
 (provide http-ver)
@@ -596,7 +694,7 @@
 (define/contract/provide (xxx-impure-port method url heads data)
   (string? url? dict? (or/c #f bytes?) . -> . input-port?)
   (define uri (url->string url))
-  (define-values (in out) (connect-uri uri))
+  (define-values (in out) (connect*-uri uri)) ;NOT resable connection
   (define new-heads
     (if data
         (heads-string->dict
@@ -639,39 +737,6 @@
 
 (module+ test
   (require rackunit)
-  ;; Confirm HTTP 1.1. processing working correctly by doing two
-  ;; requests over the same persistent connection.
-  (define (get-twice uri)
-    (define heads (hash 'Accept "text/html,text/plain"
-                        'Accept-Encoding "gzip,deflate"))
-    (define-values (in out) (connect-uri uri))
-    (define-values (path rh) (uri&headers->path&header uri heads))
-    (define/contract (get)
-      (-> (or/c #f 'ok/open 'ok/close))
-      (start-request in out "1.1" "get" path rh)
-      (define h (purify-port/log-debug in))
-      (define code (extract-http-code h))
-      (cond
-       [(= code 999)
-        #f]
-       [else
-        (define e (read-entity/bytes in h))
-        (log-http-debug
-         (format "<- ~a bytes entity transfer and content decoded"
-                 (bytes-length e)))
-        (match (extract-field "Connection" h)
-          [(regexp "(?i:close)") 'ok/close]
-          [else 'ok/open])]))
-    (define result (match (get)
-                     ['ok/open
-                      (not (not (get)))]  ;try again on same connection
-                     ['ok/close
-                      (log-http-debug
-                       "can't try again, due to Connection: close")
-                      #t]
-                     [else #f]))
-    (disconnect in out)
-    result)
 
   ;; Non I/O tests
   (test-case
@@ -766,39 +831,57 @@
 
   ;; ----------------------------------------------------------------------
   ;; Tests that do I/O
-  (define (extra-uris-to-test)
-    (define (strip-comment s)
-      (match s
-        [(pregexp "^(.*?)\\s+#" (list _ x)) x]
-        [(pregexp "^\\s*#") ""]
-        [else s]))
-    (define (strip-space s)
-      (match s
-        [(pregexp "^\\s*(\\S+)\\s*$" (list _ uri)) uri]
-        [else #f]))
-    (define (strip-comment-and-space s)
-      (strip-space (strip-comment s)))
-    (filter-map strip-comment-and-space
-                (with-handlers ([exn:fail? (lambda (exn) '())])
-                  (file->lines (build-path 'same "tests" "extra-uris")
-                               #:mode 'text #:line-mode 'any))))
+
+  ;; Confirm HTTP 1.1. processing working correctly by doing two
+  ;; requests over the same persistent connection.
+  (define (get-twice uri)
+    (define heads (hash 'Accept "text/html,text/plain"
+                        'Accept-Encoding "gzip,deflate"))
+    (define-values (in out) (connect-uri uri))
+    (define-values (path rh) (uri&headers->path&header uri heads))
+    (define/contract (get)
+      (-> (or/c #f 'ok/open 'ok/close))
+      (start-request in out "1.1" "get" path rh)
+      (define h (purify-port/log-debug in))
+      (define code (extract-http-code h))
+      (cond [(= code 999) #f]
+            [else (define e (read-entity/bytes in h))
+                  (log-http-debug
+                   (format "<- ~a bytes entity transfer and content decoded"
+                           (bytes-length e)))
+                  (cond [(close-connection? h)
+                         (unpool in out)
+                         'ok/close]
+                        [else 'ok/open])]))
+    (begin0 (match (get)
+              ['ok/open
+               (not (not (get)))]  ;try again on same connection
+              ['ok/close
+               (log-http-debug "can't try again, due to Connection: close")
+               #t]
+              [_ #f])
+      (disconnect in out)))
 
   (define xs-uri-to-test
     (remove-duplicates
-     `("http://www.httpwatch.com/httpgallery/chunked/"
+     `("http://www.racket-lang.org"
+       "http://www.httpwatch.com/httpgallery/chunked/"
        "http://www.google.com/"
        "https://www.google.com/"
        "http://www.wikipedia.org"
-       "http://www.audiotechnica.com" ;will do multiple redirects, diff ctx
+       "http://www.audiotechnica.com" ;will do multiple redirects
        "http://www.yahoo.com/"
        "http://www.microsoft.com/"
-       "http://www.amazon.com/"
-       ,@(extra-uris-to-test))))
-
-  (for ([x (in-list xs-uri-to-test)])
+       "http://www.amazon.com/")))
+  (define (test)
+    (log-http-info "Testing with current-pool-timeout = ~a"
+                   (current-pool-timeout))
+    (for ([x (in-list xs-uri-to-test)])
+      (log-http-info (format "get-twice ~a" x))
       (test-case (string-append "Actual I/O test, get-twice " x)
                  (check-true (get-twice x))))
-  (for ([x (in-list xs-uri-to-test)])
+    (for ([x (in-list xs-uri-to-test)])
+      (log-http-info (format "call/input-request, no encoding ~a" x))
       (test-case (string-append "call/input-request, no encoding " x)
                  (check-true
                   (call/input-request "1.1" "GET" x
@@ -807,7 +890,8 @@
                                       (lambda (in h)
                                         (read-entity/bytes in h)
                                         #t)))))
-  (for ([x (in-list xs-uri-to-test)])
+    (for ([x (in-list xs-uri-to-test)])
+      (log-http-info (format "call/input-request, gzip,deflate ~a" x))
       (test-case (string-append "call/input-request, gzip,deflate " x)
                  (check-true
                   (call/input-request "1.1" "GET" x
@@ -817,5 +901,8 @@
                                        'Accept-Encoding "gzip,deflate")
                                       (lambda (in h)
                                         (read-entity/bytes in h)
-                                        #t)))))
-  )
+                                        #t))))))
+  (parameterize ([current-pool-timeout 0])
+    (test))
+  (parameterize ([current-pool-timeout 10])
+    (test)))
