@@ -158,37 +158,31 @@
 (provide (contract-out [current-pool-timeout parameter/c]))
 
 (define used (make-hash)) ;(list in out) => (list scheme host port)
-(define free (make-hash)) ;(list scheme host port) => (list in out thread)
-
-(define free-sema (make-semaphore 1))
-(define-syntax-rule (with-semaphore sema es ...)
-  (call-with-semaphore sema (λ () es ...)))
-
-(define cust (make-custodian))
+(define free (make-hash)) ;(list scheme host port) => (list (list in out thread))
 
 (define/contract/provide (connect scheme host port)
   ((or/c "http" "https") string? exact-positive-integer?
    . -> . (values input-port? output-port?))
   (log-http-debug (format "connect ~a ~a ~a" scheme host port))
-  ;; If open connection is on `free` list, use it. Else call connect*
+  ;; If open connection on `free` list, pull it off and use it.
+  ;; Else call connect*
   (define-values (in out)
-    (with-semaphore free-sema
-      (match (hash-ref free (list scheme host port) #f)
-        [(list in out thd)
-         (parameterize ([current-custodian cust])
-           (kill-thread thd))
-         (hash-remove! free (list scheme host port))
-         (cond [(or (port-closed? in)
-                    (port-closed? out))
-                (log-http-warning (format "pooled port(s) closed ~a ~a ~a"
-                                          scheme host port))
-                (disconnect* in out) ;make sure both closed
-                (connect* scheme host port)]
-               [else
-                (log-http-debug (format "use pool connection for ~a ~a ~a"
+    (match (hash-ref free (list scheme host port) #f)
+      [(list (list in out thd) more ...)
+       (thread-send thd 'exit)
+       (cond [(empty? more) (hash-remove! free (list scheme host port))]
+             [else          (hash-set!    free (list scheme host port) more)])
+       (cond [(or (port-closed? in)
+                  (port-closed? out))
+              (log-http-warning (format "pooled port(s) closed ~a ~a ~a"
                                         scheme host port))
-                (values in out)])]
-        [_ (connect* scheme host port)])))
+              (disconnect* in out) ;make sure both closed
+              (connect scheme host port)] ;recur in case more on list
+             [else
+              (log-http-debug (format "use pool connection for ~a ~a ~a"
+                                      scheme host port))
+              (values in out)])]
+      [_ (connect* scheme host port)]))
   ;; When pool timeout is positive -- i.e. pooling is desired -- add
   ;; to `used`. Else don't, which ensures disconnect will simply do a
   ;; raw disconnect*.
@@ -218,26 +212,23 @@
   (match (hash-ref used (list in out) #f)
     [(list scheme host port)
      ;; Move from `used` to `free` list
+     (log-http-debug (format "~a ~a ~a to pool" scheme host port))
      (hash-remove! used (list in out))
-     (with-semaphore free-sema
-       (cond [(hash-has-key? free (list scheme host port))
-              (log-http-warning (format "~a ~a ~a already in pool" scheme host port))
-              (disconnect* in out)]
-             [else
-              (log-http-debug (format "~a ~a ~a to pool" scheme host port))
-              (hash-set! free
-                         (list scheme host port)
-                         (list in out
-                               (parameterize ([current-custodian cust])
-                                 (thread
-                                  (λ ()
-                                    (sleep (current-pool-timeout))
-                                    (log-http-debug
-                                     (format "~a ~a ~a timeout close & rm from pool"
-                                             scheme host port))
-                                    (with-semaphore free-sema
-                                      (hash-remove! free (list scheme host port)))
-                                    (disconnect* in out))))))]))]
+     (define xs
+       (cons (list in out
+                   (thread
+                    (λ ()
+                      (define evt (thread-receive-evt))
+                      (unless (sync/timeout (current-pool-timeout) evt)
+                        (log-http-debug
+                         (format "~a ~a ~a timeout close & rm from pool"
+                                 scheme host port))
+                        ;; Don't need to actually remove from the
+                        ;; `free` hash. Just use `disconnect*` to
+                        ;; close ports. We'll detect in `connect`.
+                        (disconnect* in out)))))
+             (hash-ref free (list scheme host port) '())))
+     (hash-set! free (list scheme host port) xs)]
     [_
      (log-http-debug "disconnect: not in `used` hash; calling disconnect*")
      (disconnect* in out)]))
@@ -623,10 +614,10 @@
     (unpool in out))
   (define location (redirect-uri h))
   (cond [(and location (> redirects 0))
-         (define old-url (string->url uri))
-         (define new-url (combine-url/relative old-url location))
          (unless (string-ci=? method "HEAD")
            (read-entity/bytes in h))
+         (define old-url (string->url uri))
+         (define new-url (combine-url/relative old-url location))
          (cond [(and (same-connection? old-url new-url)
                      (not (close-connection? h)))
                 (log-http-debug
@@ -864,15 +855,17 @@
 
   (define xs-uri-to-test
     (remove-duplicates
-     `("http://www.racket-lang.org"
+     `(
+       "http://www.racket-lang.org"
        "http://www.httpwatch.com/httpgallery/chunked/"
        "http://www.google.com/"
        "https://www.google.com/"
        "http://www.wikipedia.org"
        "http://www.audiotechnica.com" ;will do multiple redirects
-       "http://www.yahoo.com/"
+       "https://www.yahoo.com/"
        "http://www.microsoft.com/"
-       "http://www.amazon.com/")))
+       "http://www.amazon.com/"
+       )))
   (define (test)
     (log-http-info "Testing with current-pool-timeout = ~a"
                    (current-pool-timeout))
@@ -902,7 +895,16 @@
                                       (lambda (in h)
                                         (read-entity/bytes in h)
                                         #t))))))
-  (parameterize ([current-pool-timeout 0])
-    (test))
-  (parameterize ([current-pool-timeout 10])
-    (test)))
+  (for ([i '(0 #;10)])
+    (log-http-info "=== Testing with current-pool-timeout = ~a\n" i)
+    (parameterize ([current-pool-timeout i])
+      (test))))
+
+#;
+(parameterize ([current-pool-timeout 5])
+  (for ([i 2])
+    (call/input-request "1.1" "GET" "http://www.yahoo.com/"
+                        (hash 'Accept "text/html,text/plain")
+                        (lambda (in h)
+                          (read-entity/bytes in h)
+                          #t))))
