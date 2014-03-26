@@ -239,12 +239,19 @@
    (λ ()
      (define evt (thread-receive-evt))
      (unless (sync/timeout (current-pool-timeout) evt)
-       (log-http-debug (format "~a ~a ~a timeout close & rm from pool"
-                               scheme host port))
-       ;; Don't need to actually remove from the `free` hash. Just use
-       ;; `disconnect*` to close ports. We'll detect that they're
-       ;; closed in `connect`.
-       (disconnect* in out)))))
+       ;; If still on `free` list, disconnect
+       (match (hash-ref free (list scheme host port))
+         [(list (list ins outs thds) ...)
+          (when (and (member in ins)
+                     (member out outs)
+                     (member (current-thread) thds))
+            (log-http-debug (format "~a ~a ~a timeout close & rm from pool"
+                                    scheme host port))
+            ;; Don't need to actually remove from the `free`
+            ;; hash. Just use `disconnect*` to close ports. We'll
+            ;; detect that they're closed in `connect`.
+            (disconnect* in out))]
+         [_ (log-http-warning "timeout thread didn't find ctx on `free`")])))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
