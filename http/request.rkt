@@ -223,10 +223,12 @@
      (hash-remove! used (list in out))
      (semaphore-post used-sema)
      (log-http-debug (format "~a ~a ~a to pool" scheme host port))
+     (semaphore-wait free-sema)
      (define xs
        (cons (list in out (make-timeout-thread scheme host port in out))
              (hash-ref free (list scheme host port) '())))
-     (hash-set! free (list scheme host port) xs)]
+     (hash-set! free (list scheme host port) xs)
+     (semaphore-post free-sema)]
     [_ (semaphore-post used-sema)
        (log-http-debug "disconnect: not in `used` hash; calling disconnect*")
        (disconnect* in out)]))
