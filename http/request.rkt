@@ -611,6 +611,7 @@
                    (request/redirect ver method in out uri data heads
                                      proc redirects))))
 
+;; DEPRECATED: May result in ports being closed multiple times.
 ;; Knows how to handle redirects.
 ;; Expects heads to already contain a Content-Length header.
 (define/contract (request/redirect ver method in out uri data heads
@@ -656,13 +657,51 @@
                               (sub1 redirects))])]
         [else (proc in h)]))
 
+
+;; Knows how to handle redirects.
+;; Expects heads to already contain a Content-Length header.
+(define/contract (request/redirect/uri ver method uri data heads
+                                       proc redirects)
+  ((or/c "1.0" "1.1")
+   string?
+   string?
+   (or/c #f bytes? (output-port? . -> . void?))
+   dict?
+   (input-port? string? . -> . any/c)
+   exact-nonnegative-integer?
+   . -> . any/c)
+  (define-values (scheme host port) (uri->scheme&host&port uri))
+  (define-values (in out) (connect scheme host port))
+  (define-values (path rh) (uri&headers->path&header uri heads))
+  (define tx-data? (start-request in out ver method path rh))
+  (when (and tx-data? data)
+    (cond [(bytes? data) (display data out)]
+          [(procedure? data) (data out)])
+    (flush-output out))
+  (define h (purify-port/log-debug in))
+  (when (close-connection? h)
+    (unpool in out))
+  (define location (redirect-uri h))
+  (cond [(and location (> redirects 0))
+         (unless (string-ci=? method "HEAD")
+           (read-entity/bytes in h))
+         (disconnect in out)
+         (define old-url (string->url uri))
+         (define new-url (combine-url/relative old-url location))
+         (log-http-debug
+          (format (tr "<>" redirects location (url->string new-url))))
+         (request/redirect/uri ver method (url->string new-url)
+                               data heads proc (sub1 redirects))]
+        [else (begin0 (proc in h)
+                (disconnect in out))]))
+
 ;; call/input-request is a simpler version of `call/request` for the
 ;; case where you want to make just one request and it is not a put or
 ;; post request (there is no data to send). Like `call/request` it
 ;; gurantees the ports will be closed.
 (define/provide (call/input-request ver method uri heads proc
                                     #:redirects [redirects 10])
-  (call/request ver method uri #f heads proc redirects))
+  (request/redirect/uri ver method uri #f heads proc redirects))
 
 ;; call/output-request is a simpler version of `call/request` for the
 ;; case where you want to make just one request and it is a put or
@@ -681,17 +720,18 @@
     (input-port? string? . -> . any/c))
    (#:redirects exact-nonnegative-integer?)
    . ->* . any/c)
-  (call/request ver method uri data (maybe-add-cl heads data len) proc
-                redirects))
+  (request/redirect/uri ver method uri data (maybe-add-cl heads data len)
+                        proc redirects))
 
 (define (maybe-add-cl dict data len)
   (define cl (cond [len len]
                    [data (bytes-length data)]
                    [else #f]))
-  (cond
-   [cl (heads-string->dict
-        (maybe-insert-field "Content-Length" cl (heads-dict->string dict)))]
-   [else dict]))
+  (cond [cl (heads-string->dict
+             (maybe-insert-field "Content-Length"
+                                 cl
+                                 (heads-dict->string dict)))]
+        [else dict]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
