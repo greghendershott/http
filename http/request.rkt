@@ -940,11 +940,11 @@
     (log-http-info "=== Testing with current-pool-timeout = ~a"
                    (current-pool-timeout))
     (for ([x (in-list xs-uri-to-test)])
-      (log-http-info (format "get-twice ~a" x))
+      (log-http-info x)
+      (log-http-info "  get-twice")
       (test-case (string-append "Actual I/O test, get-twice " x)
-                 (check-true (get-twice x))))
-    (for ([x (in-list xs-uri-to-test)])
-      (log-http-info (format "call/input-request, no encoding ~a" x))
+                 (check-true (get-twice x)))
+      (log-http-info "  call/input-request, no encoding")
       (test-case (string-append "call/input-request, no encoding " x)
                  (check-true
                   (call/input-request "1.1" "GET" x
@@ -952,9 +952,8 @@
                                       (hash 'Accept "text/html,text/plain")
                                       (lambda (in h)
                                         (read-entity/bytes in h)
-                                        #t)))))
-    (for ([x (in-list xs-uri-to-test)])
-      (log-http-info (format "call/input-request, gzip,deflate ~a" x))
+                                        #t))))
+      (log-http-info "  call/input-request, gzip,deflate")
       (test-case (string-append "call/input-request, gzip,deflate " x)
                  (check-true
                   (call/input-request "1.1" "GET" x
