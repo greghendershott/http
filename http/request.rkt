@@ -295,10 +295,8 @@
       [(or "" #f) copy-port]
       ["gzip" gunzip-through-ports]
       ["deflate" inflate]
-      [(var ce)
-       (log-http-warning
-        (format "can't handle Content-Encoding \"~a\"" ce))
-       copy-port]))
+      [ce (log-http-warning (format "can't handle Content-Encoding \"~a\"" ce))
+          copy-port]))
 
 ;; If you already have read the entity and have it in `bytes?`, you
 ;; may use this to decode it based on the Content-Encoding header if
