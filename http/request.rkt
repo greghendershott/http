@@ -174,15 +174,16 @@
   (define-values (in out)
     (match (hash-ref free (list scheme host port) #f)
       [(list (list in out thd) more ...)
-       (thread-send thd 'exit #f)
-       (cond [(empty? more) (hash-remove! free (list scheme host port))]
-             [else          (hash-set!    free (list scheme host port) more)])
+       (match more
+         ['() (hash-remove! free (list scheme host port))]
+         [_   (hash-set!    free (list scheme host port) more)])
        (semaphore-post free-sema)
+       (thread-send thd 'exit #f)
        (cond [(or (port-closed? in)
                   (port-closed? out))
               (log-http-warning (format "pooled port(s) closed ~a ~a ~a"
                                         scheme host port))
-              (disconnect* in out) ;make sure both closed
+              (disconnect* in out) ;ensure both closed
               (connect scheme host port)] ;recur in case more on list
              [else
               (log-http-debug (format "use pool connection for ~a ~a ~a"
