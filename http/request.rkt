@@ -224,23 +224,24 @@
      (semaphore-post used-sema)
      (log-http-debug (format "~a ~a ~a to pool" scheme host port))
      (define xs
-       (cons (list in out
-                   (thread
-                    (λ ()
-                      (define evt (thread-receive-evt))
-                      (unless (sync/timeout (current-pool-timeout) evt)
-                        (log-http-debug
-                         (format "~a ~a ~a timeout close & rm from pool"
-                                 scheme host port))
-                        ;; Don't need to actually remove from the
-                        ;; `free` hash. Just use `disconnect*` to
-                        ;; close ports. We'll detect in `connect`.
-                        (disconnect* in out)))))
+       (cons (list in out (make-timeout-thread scheme host port in out))
              (hash-ref free (list scheme host port) '())))
      (hash-set! free (list scheme host port) xs)]
     [_ (semaphore-post used-sema)
        (log-http-debug "disconnect: not in `used` hash; calling disconnect*")
        (disconnect* in out)]))
+
+(define (make-timeout-thread scheme host port in out)
+  (thread
+   (λ ()
+     (define evt (thread-receive-evt))
+     (unless (sync/timeout (current-pool-timeout) evt)
+       (log-http-debug (format "~a ~a ~a timeout close & rm from pool"
+                               scheme host port))
+       ;; Don't need to actually remove from the `free` hash. Just use
+       ;; `disconnect*` to close ports. We'll detect that they're
+       ;; closed in `connect`.
+       (disconnect* in out)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
