@@ -862,12 +862,13 @@
        "https://www.google.com/"
        "http://www.wikipedia.org"
        "http://www.audiotechnica.com" ;will do multiple redirects
-       "https://www.yahoo.com/"
+       "http://www.yahoo.com"
+       "https://www.yahoo.com"
        "http://www.microsoft.com/"
        "http://www.amazon.com/"
        )))
   (define (test)
-    (log-http-info "Testing with current-pool-timeout = ~a"
+    (log-http-info "=== Testing with current-pool-timeout = ~a"
                    (current-pool-timeout))
     (for ([x (in-list xs-uri-to-test)])
       (log-http-info (format "get-twice ~a" x))
@@ -895,16 +896,6 @@
                                       (lambda (in h)
                                         (read-entity/bytes in h)
                                         #t))))))
-  (for ([i '(0 #;10)])
-    (log-http-info "=== Testing with current-pool-timeout = ~a\n" i)
+  (for ([i '(0 10)])
     (parameterize ([current-pool-timeout i])
       (test))))
-
-#;
-(parameterize ([current-pool-timeout 5])
-  (for ([i 2])
-    (call/input-request "1.1" "GET" "http://www.yahoo.com/"
-                        (hash 'Accept "text/html,text/plain")
-                        (lambda (in h)
-                          (read-entity/bytes in h)
-                          #t))))
