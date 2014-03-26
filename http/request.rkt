@@ -159,6 +159,10 @@
 
 (define used (make-hash)) ;(list in out) => (list scheme host port)
 (define free (make-hash)) ;(list scheme host port) => (list (list in out thread))
+(provide used free) ;just for debugging
+
+(define used-sema (make-semaphore 1))
+(define free-sema (make-semaphore 1))
 
 (define/contract/provide (connect scheme host port)
   ((or/c "http" "https") string? exact-positive-integer?
@@ -166,12 +170,14 @@
   (log-http-debug (format "connect ~a ~a ~a" scheme host port))
   ;; If open connection on `free` list, pull it off and use it.
   ;; Else call connect*
+  (semaphore-wait free-sema)
   (define-values (in out)
     (match (hash-ref free (list scheme host port) #f)
       [(list (list in out thd) more ...)
-       (thread-send thd 'exit)
+       (thread-send thd 'exit #f)
        (cond [(empty? more) (hash-remove! free (list scheme host port))]
              [else          (hash-set!    free (list scheme host port) more)])
+       (semaphore-post free-sema)
        (cond [(or (port-closed? in)
                   (port-closed? out))
               (log-http-warning (format "pooled port(s) closed ~a ~a ~a"
@@ -182,7 +188,8 @@
               (log-http-debug (format "use pool connection for ~a ~a ~a"
                                       scheme host port))
               (values in out)])]
-      [_ (connect* scheme host port)]))
+      [_ (semaphore-post free-sema)
+         (connect* scheme host port)]))
   ;; When pool timeout is positive -- i.e. pooling is desired -- add
   ;; to `used`. Else don't, which ensures disconnect will simply do a
   ;; raw disconnect*.
@@ -209,11 +216,13 @@
 (define/contract/provide (disconnect in out)
   (input-port? output-port? . -> . any)
   (log-http-debug (format "disconnect ~a ~a" in out))
+  (semaphore-wait used-sema)
   (match (hash-ref used (list in out) #f)
     [(list scheme host port)
      ;; Move from `used` to `free` list
-     (log-http-debug (format "~a ~a ~a to pool" scheme host port))
      (hash-remove! used (list in out))
+     (semaphore-post used-sema)
+     (log-http-debug (format "~a ~a ~a to pool" scheme host port))
      (define xs
        (cons (list in out
                    (thread
@@ -229,9 +238,9 @@
                         (disconnect* in out)))))
              (hash-ref free (list scheme host port) '())))
      (hash-set! free (list scheme host port) xs)]
-    [_
-     (log-http-debug "disconnect: not in `used` hash; calling disconnect*")
-     (disconnect* in out)]))
+    [_ (semaphore-post used-sema)
+       (log-http-debug "disconnect: not in `used` hash; calling disconnect*")
+       (disconnect* in out)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
