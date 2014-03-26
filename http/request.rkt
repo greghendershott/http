@@ -303,12 +303,23 @@
 ;; an unsupported encoding, this simply returns `copy-port`.
 (define/contract/provide (entity-content-decoder/ports h)
   ((or/c string? bytes?) . -> . (input-port? output-port? . -> . any))
-  (match (extract-field "Content-Encoding" h)
+  (define f
+    (match (extract-field "Content-Encoding" h)
       [(or "" #f) copy-port]
       ["gzip" gunzip-through-ports]
       ["deflate" inflate]
       [ce (log-http-warning (format "can't handle Content-Encoding \"~a\"" ce))
           copy-port]))
+  ;; Ensure this works with Transfer-Encoding: chunked. A function like
+  ;; `gunzip-through-ports` knows that its done before it pulls an EOF
+  ;; from the input stream. Meanwhile, chunk decoding needs to read
+  ;; more bytes to decide that it is done. So, the gunzip completes,
+  ;; and the calling context continues on, even though a thread is
+  ;; still trying to read from the input stream for un-chunking.
+  (lambda (in out)
+    (f in out)
+    (unless (eof-object? (read-byte in))
+      (error "expected EOF after decoded stream"))))
 
 ;; If you already have read the entity and have it in `bytes?`, you
 ;; may use this to decode it based on the Content-Encoding header if
@@ -872,10 +883,8 @@
        "https://www.google.com/"
        "http://www.wikipedia.org"
        "http://www.audiotechnica.com" ;will do multiple redirects
-       ;; NOTE: Un-commenting the yahoo.com tests results in an error:
-       ;;       "custom-port-pipe-read: input port is closed" ???
-       ;; "http://www.yahoo.com"
-       ;; "https://www.yahoo.com"
+       "http://www.yahoo.com"
+       "https://www.yahoo.com"
        "http://www.microsoft.com/"
        "http://www.amazon.com/"
        )))
