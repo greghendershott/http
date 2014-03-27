@@ -138,6 +138,7 @@
   (define-values (scheme host port) (uri->scheme&host&port uri))
   (connect* scheme host port))
 
+;; Can be called from reuse-manager thread:
 (define/contract/provide (disconnect* in out)
   (input-port? output-port? . -> . any)
   (log-http-debug (format "disconnect* ~a ~a" in out))
@@ -146,23 +147,217 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; Thread-safety wrapper: used to wrap a set of functions to make them
+;; mutually atomic. The function bodies run in a manager thread, so
+;; they should not rely on thread-local or continuation-local state.
+
+(define-syntax-rule (begin-managed
+                     (define (proc arg ...) body ...)
+                     ...)
+  (begin
+    (define (proc arg ...)
+      (call-as-managed (lambda () body ...)))
+    ...))
+
+(define manager-th
+  (thread
+   (lambda ()
+     (let loop () ((thread-receive)) (loop)))))
+
+(define (call-as-managed thunk)
+  ;; For kill safety, make sure manager-th has ability to run
+  ;; before sending the message:
+  (thread-resume manager-th (current-thread))
+  (define sema (make-semaphore))
+  (define result #f)
+  (thread-send manager-th
+               (lambda ()
+                 (set! result (call-with-values thunk vector))
+                 (semaphore-post sema)))
+  (semaphore-wait sema)
+  (vector->values result))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ;; Reusable ("pooled") connections.
 ;;
-;; `disconnect` moves connections that are in `used` hash into a
-;; `free` hash for possible later reuse. A thread handles the timeout
-;; and does the raw `disconnect*`.
+;; `disconnect` moves connections that are in `known` hash into a
+;; `avail` hash for possible later reuse.
 ;;
-;; `connect` checks the `free` list, otherwise uses `connect*`.
+;; `connect` checks the `avail` table, otherwise uses `connect*`.
 
 (define current-pool-timeout (make-parameter 0))
 (provide (contract-out [current-pool-timeout parameter/c]))
 
-(define used (make-hash)) ;(list in out) => (list scheme host port)
-(define free (make-hash)) ;(list scheme host port) => (list (list in out thread))
-(provide used free) ;just for debugging
+;; Keep track of potentially reuable connections in `known`, and
+;; available-for-reuse connections in `avail`. Use layers of hash
+;; tables and weak references to avoid leaks:
+(define known (make-weak-hash)) ; in => (list cust out scheme host port)
+(define avail (make-weak-hash)) ; cust => (list scheme host port)
+;;                                     => in => thread
 
-(define used-sema (make-semaphore 1))
-(define free-sema (make-semaphore 1))
+(begin-managed
+ ;; remember! : custodian input-port output-port scheme host port -> void
+ ;;  Records the existence of a potentially reusable connection.
+ (define (remember! custodian in out scheme host port)
+   (hash-set! known in (list custodian out scheme host port)))
+
+ ;; forget! : input-port boolean -> void
+ ;;  Forgets a potentially reusable connection, optionally closing it
+ ;;  in case it's not closed already.
+ (define (forget! in close?)
+   (define v (hash-ref known in #f))
+   (when v
+     (define custodian (car v))
+     (define out (cadr v))
+     (define s+h+p (cddr v))
+     (define a-ht (hash-ref avail custodian #f))
+     (when a-ht
+       (define ht (hash-ref a-ht s+h+p #f))
+       (when ht
+         (define th (hash-ref ht in #f))
+         (when th
+           (kill-thread th)
+           (hash-remove! ht in))))
+     (hash-remove! known in)
+     (when close?
+       (log-http-debug (apply format
+                              "~a ~a ~a timeout close & rm from pool"
+                              s+h+p))
+       (disconnect* in out))))
+
+ ;; available! : input-port output-port number -> void
+ ;;  Marks an input port as available, assuming that the
+ ;;  given output port matches what we remembered.
+ (define (available! in out timeout)
+   (define v (hash-ref known in #f))
+   (cond
+    [(and v (eq? (cadr v) out))
+     (define custodian (car v))
+     (define s+h+p (cddr v))
+     (define a-ht (or (hash-ref avail custodian #f)
+                      (let ([ht (make-hash)])
+                        (hash-set! avail custodian ht)
+                        ht)))
+     (define ht (or (hash-ref a-ht s+h+p #f)
+                    (let ([ht (make-weak-hash)])
+                      (hash-set! a-ht s+h+p ht)
+                      ht)))
+     (log-http-debug (apply format "~a ~a ~a to pool" s+h+p))
+     (define th (thread (lambda ()
+                          (sleep timeout)
+                          (forget! in #t))))
+     ;; Give timeout the manager thread's ability to run:
+     (thread-resume th (current-thread))
+     (hash-set! ht in th)]
+    [else
+     ;; Unknown or doesn't match
+     (log-http-debug "disconnect: not in `known` hash; calling disconnect*")
+     (when v (hash-remove! known in))
+     ;; Make sure ports are closed:
+     (disconnect* in out)]))
+
+ ;; acquire! : custodian scheme host port -> (values in-or-#f out-or-#f)
+ ;;  Finds a reusable connection that is available.
+ (define (acquire! custodian scheme host port)
+   (define a-ht (hash-ref avail custodian #f))
+   (cond
+    [a-ht
+     (define ht (hash-ref a-ht (list scheme host port) #f))
+     (define pos (and ht (hash-iterate-first ht)))
+     (cond
+      [pos
+       (define in (hash-iterate-key ht pos))
+       (define th (hash-ref ht in #f))
+       (hash-remove! ht in)
+       (when th (kill-thread th))
+       (define v (hash-ref known in #f))
+       (cond
+        [v (values in (cadr v))]
+        [else
+         (log-http-error "missing information for supposedly available connection")
+         (values #f #f)])]
+      [else (values #f #f)])]
+    [else (values #f #f)])))
+
+;; Tests for the table-management functions:
+(module+ test
+  (require rackunit)
+
+  (test-case
+   "managed tables"
+
+   (define c1 (current-custodian))
+   (define c2 (make-custodian))
+
+   (define (check-no-acquire c
+                             #:scheme [scheme "http"]
+                             #:host [host "server1"]
+                             #:port [port 80])
+     (check-equal? (let-values ([(i o) (acquire! c scheme host port)])
+                     (vector i o))
+                   (vector #f #f)))
+   (check-no-acquire c1)
+
+   ;; Ok to try to forget non-remembered:
+   (define-values (i1 o1) (make-pipe))
+   (forget! i1 #f)
+   (check-equal? (port-closed? i1) #f)
+   (check-equal? (port-closed? o1) #f)
+
+   ;; Remember and available => acquire (when right context)
+   (define-values (i2 o2) (make-pipe))
+   (remember! c1 i2 o2 "http" "server1" 80)
+   (check-no-acquire c1)
+   (available! i2 o2 1000)
+   (check-no-acquire c2)
+   (check-no-acquire c1 #:scheme "https")
+   (check-no-acquire c1 #:host "server2")
+   (check-no-acquire c1 #:port 90)
+   (check-equal? (let-values ([(i o) (acquire! c1 "http" "server1" 80)])
+                   (vector i o))
+                 (vector i2 o2))
+   (check-no-acquire c1)
+
+   ;; Timeout => no acquire
+   (available! i2 o2 0.1)
+   (sleep 0.1)
+   (sync (system-idle-evt))
+   (check-no-acquire c1)
+   (check-equal? (port-closed? i2) #t)
+   (check-equal? (port-closed? o2) #t)
+
+   ;; Forget => no acquire
+   (define-values (i3 o3) (make-pipe))
+   (remember! c1 i3 o3 "http" "server1" 80)
+   (forget! i3 #f)
+   (available! i3 o3 1000)
+   (check-no-acquire c1)
+
+   ;; Two available => get them in some order
+   (define-values (i4 o4) (make-pipe))
+   (define-values (i5 o5) (make-pipe))
+   (remember! c2 i4 o4 "http" "server1" 80)
+   (remember! c2 i5 o5 "http" "server1" 80)
+   (available! i4 o4 1000)
+   (available! i5 o5 1000)
+   (check-equal? (let-values ([(ia oa) (acquire! c2 "http" "server1" 80)]
+                              [(ib ob) (acquire! c2 "http" "server1" 80)])
+                   (if (eq? ia i4)
+                       (vector ia oa ib ob)
+                       (vector ib ob ia oa)))
+                 (vector i4 o4 i5 o5))
+   (check-no-acquire c2)
+
+   ;; Input and output port mismatch => not made available:
+   (define-values (i6 o6) (make-pipe))
+   (remember! c2 i6 o6 "http" "server1" 80)
+   (available! i6 o4 1000)
+   (check-no-acquire c2)
+   (check-equal? (port-closed? i6) #t)
+   (check-equal? (port-closed? o6) #f)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define/contract/provide (connect scheme host port)
   ((or/c "http" "https") string? exact-positive-integer?
@@ -170,35 +365,26 @@
   (log-http-debug (format "connect ~a ~a ~a" scheme host port))
   ;; If open connection on `free` list, pull it off and use it.
   ;; Else call connect*
-  (semaphore-wait free-sema)
-  (define-values (in out)
-    (match (hash-ref free (list scheme host port) #f)
-      [(list (list in out thd) more ...)
-       (match more
-         ['() (hash-remove! free (list scheme host port))]
-         [_   (hash-set!    free (list scheme host port) more)])
-       (semaphore-post free-sema)
-       (thread-send thd 'exit #f)
-       (cond [(or (port-closed? in)
-                  (port-closed? out))
-              (log-http-warning (format "pooled port(s) closed ~a ~a ~a"
-                                        scheme host port))
-              (disconnect* in out) ;ensure both closed
-              (connect scheme host port)] ;recur in case more on list
-             [else
-              (log-http-debug (format "use pool connection for ~a ~a ~a"
-                                      scheme host port))
-              (values in out)])]
-      [_ (semaphore-post free-sema)
-         (connect* scheme host port)]))
-  ;; When pool timeout is positive -- i.e. pooling is desired -- add
-  ;; to `used`. Else don't, which ensures disconnect will simply do a
-  ;; raw disconnect*.
-  (when (positive? (current-pool-timeout))
-    (hash-set! used
-               (list in out)
-               (list scheme host port)))
-  (values in out))
+  (define-values (in out) (acquire! (current-custodian) scheme host port))
+  (cond
+   [(not in)
+    (define-values (in out) (connect* scheme host port))
+    ;; When pool timeout is positive -- i.e. pooling is desired --
+    ;; remember the connection. Else don't, which ensures disconnect
+    ;; will simply do a raw disconnect*.
+    (when (positive? (current-pool-timeout))
+      (remember! (current-custodian) in out scheme host port))
+    (values in out)]
+   [(or (port-closed? in)
+        (port-closed? out))
+    (log-http-warning (format "pooled port(s) closed ~a ~a ~a"
+                              scheme host port))
+    (disconnect* in out) ;ensure both closed
+    (connect scheme host port)] ;try again
+   [else
+    (log-http-debug (format "use pool connection for ~a ~a ~a"
+                            scheme host port))
+    (values in out)]))
 
 (define/contract/provide (connect-uri uri)
   (string?  . -> . (values input-port? output-port?))
@@ -212,46 +398,12 @@
 (define/contract/provide (unpool in out)
   (input-port? output-port? . -> . any)
   (log-http-debug (format "unpool ~a ~a" in out))
-  (hash-remove! used (list in out)))
+  (forget! in #f))
 
 (define/contract/provide (disconnect in out)
   (input-port? output-port? . -> . any)
   (log-http-debug (format "disconnect ~a ~a" in out))
-  (semaphore-wait used-sema)
-  (match (hash-ref used (list in out) #f)
-    [(list scheme host port)
-     ;; Move from `used` to `free` list
-     (hash-remove! used (list in out))
-     (semaphore-post used-sema)
-     (log-http-debug (format "~a ~a ~a to pool" scheme host port))
-     (semaphore-wait free-sema)
-     (define xs
-       (cons (list in out (make-timeout-thread scheme host port in out))
-             (hash-ref free (list scheme host port) '())))
-     (hash-set! free (list scheme host port) xs)
-     (semaphore-post free-sema)]
-    [_ (semaphore-post used-sema)
-       (log-http-debug "disconnect: not in `used` hash; calling disconnect*")
-       (disconnect* in out)]))
-
-(define (make-timeout-thread scheme host port in out)
-  (thread
-   (λ ()
-     (define evt (thread-receive-evt))
-     (unless (sync/timeout (current-pool-timeout) evt)
-       ;; If still on `free` list, disconnect
-       (match (hash-ref free (list scheme host port))
-         [(list (list ins outs thds) ...)
-          (when (and (member in ins)
-                     (member out outs)
-                     (member (current-thread) thds))
-            (log-http-debug (format "~a ~a ~a timeout close & rm from pool"
-                                    scheme host port))
-            ;; Don't need to actually remove from the `free`
-            ;; hash. Just use `disconnect*` to close ports. We'll
-            ;; detect that they're closed in `connect`.
-            (disconnect* in out))]
-         [_ (log-http-warning "timeout thread didn't find ctx on `free`")])))))
+  (available! in out (current-pool-timeout)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
