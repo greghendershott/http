@@ -755,68 +755,6 @@
                 (lambda () (proc in out))
                 (lambda () (disconnect in out))))
 
-(define/contract (call/request ver method uri data heads proc redirects)
-  ((or/c "1.0" "1.1")
-   string?
-   string?
-   (or/c #f bytes? (output-port? . -> . void?))
-   dict?
-   (input-port? string? . -> . any/c)
-   exact-nonnegative-integer?
-   . -> . any/c)
-  (define-values (scheme host port) (uri->scheme&host&port uri))
-  (call/requests scheme host port
-                 (lambda (in out)
-                   (request/redirect ver method in out uri data heads
-                                     proc redirects))))
-
-;; DEPRECATED: May result in ports being closed multiple times.
-;; Knows how to handle redirects.
-;; Expects heads to already contain a Content-Length header.
-(define/contract (request/redirect ver method in out uri data heads
-                                   proc redirects)
-  ((or/c "1.0" "1.1")
-   string?
-   input-port?
-   output-port?
-   string?
-   (or/c #f bytes? (output-port? . -> . void?))
-   dict?
-   (input-port? string? . -> . any/c)
-   exact-nonnegative-integer?
-   . -> . any/c)
-  (define-values (path rh) (uri&headers->path&header uri heads))
-  (define tx-data? (start-request in out ver method path rh))
-  (when (and tx-data? data)
-    (cond [(bytes? data) (display data out)]
-          [(procedure? data) (data out)])
-    (flush-output out))
-  (define h (purify-port/log-debug in))
-  (when (close-connection? h)
-    (unpool in out))
-  (define location (redirect-uri h))
-  (cond [(and location (> redirects 0))
-         (unless (string-ci=? method "HEAD")
-           (read-entity/bytes in h))
-         (define old-url (string->url uri))
-         (define new-url (combine-url/relative old-url location))
-         (cond [(and (same-connection? old-url new-url)
-                     (not (close-connection? h)))
-                (log-http-debug
-                 (format "<> Redirect ~a using SAME connection. ~a ~a"
-                         redirects location (url->string new-url)))
-                (request/redirect ver method in out (url->string new-url)
-                                  data heads proc (sub1 redirects))]
-               [else
-                (log-http-debug
-                 (format "<> Redirect ~a using NEW connection. ~a ~a"
-                         redirects location (url->string new-url)))
-                (disconnect in out)
-                (call/request ver method (url->string new-url) data heads proc
-                              (sub1 redirects))])]
-        [else (proc in h)]))
-
-
 ;; Knows how to handle redirects.
 ;; Expects heads to already contain a Content-Length header.
 (define/contract (request/redirect/uri ver method uri data heads
@@ -854,15 +792,15 @@
         [else (begin0 (proc in h)
                 (disconnect in out))]))
 
-;; call/input-request is a simpler version of `call/request` for the
+;; call/input-request is a simpler version of `call/requests` for the
 ;; case where you want to make just one request and it is not a put or
-;; post request (there is no data to send). Like `call/request` it
+;; post request (there is no data to send). Like `call/requests` it
 ;; gurantees the ports will be closed.
 (define/provide (call/input-request ver method uri heads proc
                                     #:redirects [redirects 10])
   (request/redirect/uri ver method uri #f heads proc redirects))
 
-;; call/output-request is a simpler version of `call/request` for the
+;; call/output-request is a simpler version of `call/requests` for the
 ;; case where you want to make just one request and it is a put or
 ;; post request. The data may be passed as bytes? or as a procedure
 ;; that will write to an output-port?. If the latter, you must pass
