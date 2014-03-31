@@ -439,7 +439,7 @@
   (match (extract-field "Expect" heads)
     ["100-continue"
      (log-http-debug "Request header 'Expect: 100-continue'. Waiting/peeking...")
-     (unless (sync/timeout 10.0 in)
+     (unless (sync/timeout 30.0 in)
        (raise (exn:fail:network "Timeout waiting for 100 continue"
                                 (current-continuation-marks))))
      (match (regexp-match-peek-positions
