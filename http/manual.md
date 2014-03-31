@@ -43,9 +43,19 @@ connection.
 (disconnect in out) -> any                            
   in : input-port?                                    
   out : output-port?                                  
+(connection-pool-timeout) -> nonnegative-integer?     
+(connection-pool-timeout seconds) -> void?            
+  seconds : nonnegative-integer?                      
 ```
 
 Begin and end an HTTP connection.
+
+When `connection-pool-timeout` is positive, `disconnect` will keep the
+connection open for that number of seconds, and `connect` may reuse it.
+Connections that timeout are automatically closed.
+
+When `connection-pool-timeout` is positive, `connect` behaves like "raw"
+`connect*` and `disconnect` behaves like "raw" `disconnect*`.
 
 Examples:
 
@@ -67,6 +77,20 @@ Example:
 (define-values (in out) (connect-uri "http://www.google.com/"))
 (disconnect in out)                                            
 ```
+
+```racket
+(connect* scheme host port) -> input-port? output-port?
+  scheme : (or/c "http" "https")                       
+  host : string?                                       
+  port : exact-positive-integer?                       
+(disconnect* in out) -> any                            
+  in : input-port?                                     
+  out : output-port?                                   
+```
+
+Begin and end an HTTP connection that is "raw", in the sense that
+connections are not reused even when `connection-pool-timeout` is
+positive.
 
 ```racket
 (uri->scheme&host&port uri) -> (or/c "http" "https")  

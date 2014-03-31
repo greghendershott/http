@@ -51,9 +51,20 @@ over one connection.
 
 @defproc[(disconnect [in input-port?][out output-port?]) any]
 
+@defparam[connection-pool-timeout seconds nonnegative-integer?]
+
 )]{
 
 Begin and end an HTTP connection.
+
+When @racket[connection-pool-timeout] is positive, @racket[disconnect]
+will keep the connection open for that number of seconds, and
+@racket[connect] may reuse it. Connections that timeout are
+automatically closed.
+
+When @racket[connection-pool-timeout] is positive, @racket[connect]
+behaves like "raw" @racket[connect*] and @racket[disconnect] behaves
+like "raw" @racket[disconnect*].
 
 Examples:
 @racketblock[
@@ -74,6 +85,24 @@ Example:
 (define-values (in out) (connect-uri "http://www.google.com/"))
 (disconnect in out)
 ]
+
+}
+
+@deftogether[(
+
+@defproc[(connect*
+[scheme (or/c "http" "https")]
+[host string?]
+[port exact-positive-integer?]
+) (values input-port? output-port?)]
+
+@defproc[(disconnect* [in input-port?][out output-port?]) any]
+
+)]{
+
+Begin and end an HTTP connection that is "raw", in the sense that
+connections are not reused even when @racket[connection-pool-timeout]
+is positive.
 
 }
 
