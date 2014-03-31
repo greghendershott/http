@@ -54,7 +54,7 @@ When `connection-pool-timeout` is positive, `disconnect` will keep the
 connection open for that number of seconds, and `connect` may reuse it.
 Connections that timeout are automatically closed.
 
-When `connection-pool-timeout` is positive, `connect` behaves like "raw"
+When `connection-pool-timeout` is zero, `connect` behaves like "raw"
 `connect*` and `disconnect` behaves like "raw" `disconnect*`.
 
 Examples:

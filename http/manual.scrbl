@@ -62,7 +62,7 @@ will keep the connection open for that number of seconds, and
 @racket[connect] may reuse it. Connections that timeout are
 automatically closed.
 
-When @racket[connection-pool-timeout] is positive, @racket[connect]
+When @racket[connection-pool-timeout] is zero, @racket[connect]
 behaves like "raw" @racket[connect*] and @racket[disconnect] behaves
 like "raw" @racket[disconnect*].
 
