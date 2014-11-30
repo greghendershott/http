@@ -10,8 +10,7 @@
          file/gunzip
          racket/date
          "head.rkt"
-         "util.rkt"
-         )
+         "util.rkt")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -990,26 +989,27 @@
     (define-values (in out) (connect-uri uri))
     (define-values (path rh) (uri&headers->path&header uri heads))
     (define/contract (get)
-      (-> (or/c #f 'ok/open 'ok/close))
+      (-> (or/c #f 'ok/open 'ok/close 'ok/redirect))
       (start-request in out "1.1" "get" path rh)
       (define h (purify-port/log-debug in))
       (define code (extract-http-code h))
-      (cond [(= code 999) #f]
-            [else (define e (read-entity/bytes in h))
-                  (log-http-debug
-                   (format "<- ~a bytes entity transfer and content decoded"
-                           (bytes-length e)))
-                  (cond [(close-connection? h)
-                         (unpool in out)
-                         'ok/close]
-                        [else 'ok/open])]))
-    (begin0 (match (get)
-              ['ok/open
-               (not (not (get)))]  ;try again on same connection
-              ['ok/close
-               (log-http-debug "can't try again, due to Connection: close")
-               #t]
-              [_ #f])
+      (case code
+        [(999) #f]
+        [(301 302) 'ok/redirect]
+        [else (define e (read-entity/bytes in h))
+              (log-http-debug
+               (format "<- ~a bytes entity transfer and content decoded"
+                       (bytes-length e)))
+              (cond [(close-connection? h)
+                     (unpool in out)
+                     'ok/close]
+                    [else 'ok/open])]))
+    (begin0
+        (match (get)
+          ['ok/open (not (not (get)))] ;try again on same connection
+          ['ok/close (log-http-debug "can't try again, due to 'Connection: close'") #t]
+          ['ok/redirect (log-http-debug "can't try again, due to redirect") #t]
+          [_ #f])
       (disconnect in out)))
 
   (define xs-uri-to-test
