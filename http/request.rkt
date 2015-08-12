@@ -500,7 +500,7 @@
       (decode func b)))
 
 ;; This is the core procedure to read an HTTP entity in accordance
-;; with the `Transfer-Encooding` header. It returns an `input-port?`
+;; with the `Transfer-Encoding` header. It returns an `input-port?`
 ;; from which you can read the entity until the port returns `eof`. By
 ;; giving you the port and letting you do the reads, you can read a
 ;; very large entity in small pieces (to provide a progress indicator,
@@ -755,7 +755,8 @@
                 (lambda () (disconnect in out))))
 
 ;; Knows how to handle redirects.
-;; Expects heads to already contain a Content-Length header.
+;; Expects heads to already contain a Content-Length header, or,
+;; Transfer-Encoding: chunked.
 (define/contract (request/redirect/uri ver method uri data heads
                                        proc redirects)
   ((or/c "1.0" "1.1")
@@ -802,9 +803,9 @@
 ;; call/output-request is a simpler version of `call/requests` for the
 ;; case where you want to make just one request and it is a put or
 ;; post request. The data may be passed as bytes? or as a procedure
-;; that will write to an output-port?. If the latter, you must pass
-;; `len' unless you have already supplied a Content-Length header
-;; yourself.
+;; (-> output-port? void?). If the latter, you should supply a non-#f
+;; `len' unless you have already supplied a Content-Length header or
+;; you will be doing Transfer-Encoding: chunked.
 (define/contract/provide (call/output-request ver method uri data len heads proc
                                               #:redirects [redirects 10])
   (((or/c "1.0" "1.1")
@@ -821,7 +822,7 @@
 
 (define (maybe-add-cl dict data len)
   (define cl (cond [len len]
-                   [data (bytes-length data)]
+                   [(bytes? data) (bytes-length data)]
                    [else #f]))
   (cond [cl (heads-string->dict
              (maybe-insert-field "Content-Length"
