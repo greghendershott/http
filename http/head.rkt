@@ -14,8 +14,7 @@
          heads-string->dict
          heads-dict->string
          maybe-dict-set
-         maybe-dict-set*
-         )
+         maybe-dict-set*)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -109,7 +108,7 @@
 ;; values separated by \n.  Precedent: How Rack handles this.
 (define/contract (heads-string->dict s [dupe-sep "\n"])
   ((string?) (string?) . ->* . dict?)
-  (for/fold ([h (hash)])
+  (for/fold ([h (hasheq)])
             ([x (in-list (extract-all-fields s))])
     (match-define (cons k v) x)
     (let ([k (string->symbol k)])

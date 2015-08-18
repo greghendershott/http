@@ -1,5 +1,6 @@
-tests/extra-uris
-planet-docs/*
-*.plt
-compiled/
 .DS_Store
+compiled/
+htmldocs/
+doc/
+*~
+tests/extra-uris

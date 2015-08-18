@@ -3,7 +3,7 @@
 Documentation
 =============
 
-[Documentation](https://github.com/greghendershott/http/blob/master/http/manual.md).
+[Documentation](http://pkg-build.racket-lang.org/doc/http@http/index.html).
 
 
 Unit tests
