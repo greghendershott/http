@@ -4,6 +4,7 @@
 (define deps '("base"
                "html-lib"
                "rackunit-lib"))
-(define build-deps '("racket-doc"
+(define build-deps '("net-doc"
+                     "racket-doc"
                      "rackunit-lib"
                      "scribble-lib"))
