@@ -1,13 +1,11 @@
 [![Build Status](https://travis-ci.org/greghendershott/http.png?branch=master)](https://travis-ci.org/greghendershott/http)
+[![raco pkg install http](https://img.shields.io/badge/Racket_Package-raco_pkg_install_http-blue.svg)](http:pkgs.racket-lang.org/#[http])
 
-Documentation
-=============
+# Documentation
 
 [Documentation](http://pkg-build.racket-lang.org/doc/http@http/index.html).
 
-
-Unit tests
-==========
+# Unit tests
 
 The `rackunit` tests use the submodule feature new in Racket 5.3. Tests are in
 `(module+ test ..)`. You can run the tests for a `foo.rkt` file with `raco
