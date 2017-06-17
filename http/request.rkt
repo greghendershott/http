@@ -926,7 +926,7 @@
                                               "Location: foobar\r\n"
                                               "\r\n"))
                  "foobar"))
-  
+
   (test-case
    "seconds->gmt-string"
    (check-equal? 0
@@ -1055,6 +1055,8 @@
                                       (lambda (in h)
                                         (read-entity/bytes in h)
                                         #t))))))
-  (for ([i '(0 10)])
-    (parameterize ([current-pool-timeout i])
-      (test))))
+  (unless (getenv "PLT_PKG_BUILD_SERVICE")
+    (for ([i '(0 10)])
+      (parameterize ([current-pool-timeout i])
+        (test)))))
+
