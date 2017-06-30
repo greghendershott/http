@@ -281,6 +281,9 @@
 
 ;; Tests for the table-management functions:
 (module+ test
+  (module config info
+    (define timeout 180))
+  
   (require rackunit)
 
   (test-case
