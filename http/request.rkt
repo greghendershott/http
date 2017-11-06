@@ -1026,7 +1026,6 @@
        "http://www.wikipedia.org"
        "http://www.audiotechnica.com" ;will do multiple redirects
        "http://www.yahoo.com"
-       "https://www.yahoo.com"
        "http://www.microsoft.com/"
        "http://www.amazon.com/"
        )))
