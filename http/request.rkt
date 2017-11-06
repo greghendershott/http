@@ -283,7 +283,7 @@
 (module+ test
   (module config info
     (define timeout 180))
-  
+
   (require rackunit)
 
   (test-case
@@ -1025,7 +1025,6 @@
        "https://www.google.com/"
        "http://www.wikipedia.org"
        "http://www.audiotechnica.com" ;will do multiple redirects
-       "http://www.yahoo.com"
        "http://www.microsoft.com/"
        "http://www.amazon.com/"
        )))
@@ -1061,4 +1060,3 @@
     (for ([i '(0 10)])
       (parameterize ([current-pool-timeout i])
         (test)))))
-
