@@ -1,7 +1,7 @@
-#lang setup/infotab
-(define version "0.3")
+#lang info
+(define version "0.4")
 (define collection 'multi)
-(define deps '("base"
+(define deps '(["base" #:version "6.2"]
                "html-lib"
                "rackunit-lib"))
 (define build-deps '("net-doc"
