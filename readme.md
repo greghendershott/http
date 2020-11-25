@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/greghendershott/http.png?branch=master)](https://travis-ci.org/greghendershott/http)
+[![CI](https://github.com/greghendershott/http/workflows/CI/badge.svg)](https://github.com/greghendershott/http/actions)
 [![raco pkg install http](https://img.shields.io/badge/raco_pkg_install-http-aa00ff.svg)](http:pkgs.racket-lang.org/#[http])
 [![Documentation](https://img.shields.io/badge/read-documentation-blue.svg)](http://pkg-build.racket-lang.org/doc/http@http/index.html)
 ![MIT License](https://img.shields.io/badge/license-MIT-118811.svg)
