@@ -28,6 +28,6 @@ jobs:
           distribution: 'full'
           version: ${{ matrix.racket_version }}
       - name: Install Package
-        run: raco pkg install --deps search-auto --link http
+        run: raco pkg install --auto
       - name: Run Tests
         run: raco test -x -p http
