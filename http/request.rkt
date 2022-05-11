@@ -1018,16 +1018,13 @@
 
   (define xs-uri-to-test
     (remove-duplicates
-     `(
-       "http://www.racket-lang.org"
-       "http://www.httpwatch.com/httpgallery/chunked/"
-       "http://www.google.com/"
+     `("https://www.racket-lang.org"
+       "https://www.httpwatch.com/httpgallery/chunked/"
        "https://www.google.com/"
-       "http://www.wikipedia.org"
+       "https://www.google.com/"
+       "https://www.wikipedia.org"
        "http://www.audiotechnica.com" ;will do multiple redirects
-       "http://www.microsoft.com/"
-       "http://www.amazon.com/"
-       )))
+       "https://www.amazon.com/")))
   (define (test)
     (log-http-info "=== Testing with current-pool-timeout = ~a"
                    (current-pool-timeout))
