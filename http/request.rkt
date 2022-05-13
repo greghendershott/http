@@ -409,6 +409,8 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(define default-user-agent (format "Racket/~a (http package)" (version)))
+
 ;; When method is "put" or "post", this returns a boolean?. If #t, you
 ;; should go ahead and transmit the entity (the put or post data),
 ;; after which you should call purify-port to read the response
@@ -418,14 +420,14 @@
 ;;
 ;; For other methods, this will always return #t and you should always
 ;; just go ahead and call purify-port to read the response headers.
-(define/contract/provide (start-request in out ver method path heads)
+(define/contract/provide (start-request in out ver method path heads*)
   (input-port? output-port? (or/c "1.0" "1.1") string? string? string?
-   . -> . boolean?)
+               . -> . boolean?)
+  (define heads (maybe-insert-field "User-Agent" default-user-agent heads*))
   (log-http-debug (format "-> ~a ~a HTTP/~a" (string-upcase method) path ver))
   (when (log-level? http-logger 'debug)
     (for ([(k v) (in-dict (heads-string->dict heads))])
         (log-http-debug (format "-> ~a: ~a" k v))))
-
   (display (format "~a ~a HTTP/~a\r\n" (string-upcase method) path ver) out)
   (display (format "~a" heads) out)
   (100-continue? heads in out))
@@ -1016,44 +1018,43 @@
           [_ #f])
       (disconnect in out)))
 
-  (define xs-uri-to-test
-    (remove-duplicates
-     `("https://www.racket-lang.org"
-       "https://www.httpwatch.com/httpgallery/chunked/"
-       "https://www.google.com/"
-       "https://www.google.com/"
-       "https://www.wikipedia.org"
-       "http://www.audiotechnica.com" ;will do multiple redirects
-       "https://www.amazon.com/")))
-  (define (test)
-    (log-http-info "=== Testing with current-pool-timeout = ~a"
-                   (current-pool-timeout))
-    (for ([x (in-list xs-uri-to-test)])
-      (log-http-info x)
-      (log-http-info "  get-twice")
-      (test-case (string-append "Actual I/O test, get-twice " x)
-                 (check-true (get-twice x)))
-      (log-http-info "  call/input-request, no encoding")
-      (test-case (string-append "call/input-request, no encoding " x)
-                 (check-true
-                  (call/input-request "1.1" "GET" x
-                                      #:redirects 10
-                                      (hash 'Accept "text/html,text/plain")
-                                      (lambda (in h)
-                                        (read-entity/bytes in h)
-                                        #t))))
-      (log-http-info "  call/input-request, gzip,deflate")
-      (test-case (string-append "call/input-request, gzip,deflate " x)
-                 (check-true
-                  (call/input-request "1.1" "GET" x
-                                      #:redirects 10
-                                      (hash
-                                       'Accept "text/html,text/plain"
-                                       'Accept-Encoding "gzip,deflate")
-                                      (lambda (in h)
-                                        (read-entity/bytes in h)
-                                        #t))))))
+  (define uris-to-test
+    `("https://www.racket-lang.org"
+      "https://www.httpwatch.com/httpgallery/chunked/"
+      "https://www.google.com/"
+      "http://www.google.com/" ;test http -> https redirect
+      "https://www.wikipedia.org"
+      "https://www.microsoft.com"
+      "http://www.audiotechnica.com" ;will do multiple redirects
+      "https://www.amazon.com/"))
+  (define (test-uri x)
+    (log-http-info x)
+    (log-http-info "  get-twice")
+    (test-case (string-append "Actual I/O test, get-twice " x)
+      (check-true (get-twice x)))
+    (log-http-info "  call/input-request, no encoding")
+    (test-case (string-append "call/input-request, no encoding " x)
+      (check-true
+       (call/input-request "1.1" "GET" x
+                           #:redirects 10
+                           (hash 'Accept "text/html,text/plain")
+                           (lambda (in h)
+                             (read-entity/bytes in h)
+                             #t))))
+    (log-http-info "  call/input-request, gzip,deflate")
+    (test-case (string-append "call/input-request, gzip,deflate " x)
+      (check-true
+       (call/input-request "1.1" "GET" x
+                           #:redirects 10
+                           (hash
+                            'Accept "text/html,text/plain"
+                            'Accept-Encoding "gzip,deflate")
+                           (lambda (in h)
+                             (read-entity/bytes in h)
+                             #t)))))
   (unless (getenv "PLT_PKG_BUILD_SERVICE")
     (for ([i '(0 10)])
       (parameterize ([current-pool-timeout i])
-        (test)))))
+        (log-http-info "=== Testing with current-pool-timeout = ~a"
+                       (current-pool-timeout))
+        (for-each test-uri uris-to-test)))))
