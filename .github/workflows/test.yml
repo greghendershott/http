@@ -11,19 +11,23 @@ jobs:
       fail-fast: false
       matrix:
         racket_version:
-          - '6.9'
+          - '7.4'
           - 'stable'
           - 'current'
-    name: Test Racket ${{ matrix.racket_version }}
+        racket_variant:
+          - 'CS'
+          - 'BC'
+    name: Test Racket ${{ matrix.racket_version }} ${{ matrix.racket_variant }}
     steps:
       - name: Checkout
         uses: actions/checkout@master
       - name: Install Racket
-        uses: Bogdanp/setup-racket@v1.1
+        uses: Bogdanp/setup-racket@v1.10
         with:
           architecture: 'x64'
           distribution: 'full'
           version: ${{ matrix.racket_version }}
+          variant: ${{ matrix.racket_variant }}
       - name: Install Package
         run: make install
       - name: Check Deps
