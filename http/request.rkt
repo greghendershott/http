@@ -295,13 +295,21 @@
    (define c1 (current-custodian))
    (define c2 (make-custodian))
 
-   (define (check-no-acquire c
-                             #:scheme [scheme "http"]
-                             #:host [host "server1"]
-                             #:port [port 80])
-     (check-equal? (let-values ([(i o) (acquire! c scheme host port)])
-                     (vector i o))
-                   (vector #f #f)))
+   (define-syntax (check-no-acquire stx)
+     (syntax-case stx ()
+       [(_ a ...)
+        (syntax/loc stx
+          (with-check-info (['name (cons 'check-no-acquire
+                                         (map syntax-e (syntax->list #'(a ...))))])
+           (check-equal? (call-with-values (λ () (kw-acquire a ...))
+                                           vector)
+                         (vector #f #f))))]))
+   (define (kw-acquire c
+                       #:scheme [scheme "http"]
+                       #:host [host "server1"]
+                       #:port [port 80])
+     (acquire! c scheme host port))
+
    (check-no-acquire c1)
 
    ;; Ok to try to forget non-remembered:
