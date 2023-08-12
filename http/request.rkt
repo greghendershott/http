@@ -298,12 +298,12 @@
    (define-syntax (check-no-acquire stx)
      (syntax-case stx ()
        [(_ a ...)
-        (syntax/loc stx
-          (with-check-info (['name (cons 'check-no-acquire
+        #`(with-check-info (['name (cons 'check-no-acquire
                                          (map syntax-e (syntax->list #'(a ...))))])
-           (check-equal? (call-with-values (λ () (kw-acquire a ...))
-                                           vector)
-                         (vector #f #f))))]))
+            #,(syntax/loc stx
+                (check-equal? (call-with-values (λ () (kw-acquire a ...))
+                                                vector)
+                              (vector #f #f))))]))
    (define (kw-acquire c
                        #:scheme [scheme "http"]
                        #:host [host "server1"]
