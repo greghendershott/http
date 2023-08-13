@@ -333,8 +333,9 @@
    (check-no-acquire c1)
 
    ;; Timeout => no acquire
-   (available! i2 o2 0.1)
-   (sleep 0.1)
+   (define timeout 0.1)
+   (available! i2 o2 timeout)
+   (sleep (+ timeout 0.1))
    (sync (system-idle-evt))
    (check-no-acquire c1)
    (check-equal? (port-closed? i2) #t)
