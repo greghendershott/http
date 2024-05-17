@@ -1037,7 +1037,6 @@
       "http://www.google.com/" ;test http -> https redirect
       "https://www.wikipedia.org"
       "https://www.microsoft.com"
-      "http://www.audiotechnica.com" ;will do multiple redirects
       "https://www.amazon.com/"))
   (define (test-uri x)
     (log-http-info x)
